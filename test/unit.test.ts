@@ -140,6 +140,7 @@ function createSearchBackendStub(overrides?: Record<string, unknown>) {
 		scheduleUpdate: () => {},
 		runUpdateNow: async () => {},
 		clearScheduledUpdate: () => {},
+		close: async () => {},
 		getUpdateMode: () => "background" as const,
 		...overrides,
 	};
@@ -541,9 +542,10 @@ describe("qmdInstallInstructions", () => {
 		expect(qmdInstallInstructions()).toContain("github.com/tobi/qmd");
 	});
 
-	test("includes setup commands", () => {
+	test("includes sdk recovery guidance", () => {
 		const instructions = qmdInstallInstructions();
-		expect(instructions).toContain("qmd collection add");
+		expect(instructions).toContain("qmd.sqlite");
+		expect(instructions).toContain("Node 22+");
 		expect(instructions).toContain("qmd embed");
 	});
 });
@@ -1203,7 +1205,7 @@ describe("lifecycle hooks", () => {
 		const { ctx, notify, getTerminalHandler } = createLifecycleCtx();
 		await mockPi.hooks.session_start({}, ctx);
 		expect(notify).toHaveBeenCalled();
-		expect(String(notify.mock.calls[0]?.[0])).toContain("memory_search requires qmd");
+		expect(String(notify.mock.calls[0]?.[0])).toContain("memory_search requires qmd search support");
 		expect(getTerminalHandler()).toBeTypeOf("function");
 	});
 
@@ -1287,14 +1289,16 @@ describe("lifecycle hooks", () => {
 		expect(readFileSafe(dailyPath(todayStr()))).toBeNull();
 	});
 
-	test("session_shutdown clears scheduled backend updates", async () => {
+	test("session_shutdown clears scheduled backend updates and closes the backend", async () => {
 		const clearScheduledUpdate = mock(() => {});
+		const close = mock(async () => {});
 		const mockPi = createMockPi();
 		registerExtension(mockPi.pi as any, {
-			searchBackend: createSearchBackendStub({ clearScheduledUpdate }),
+			searchBackend: createSearchBackendStub({ clearScheduledUpdate, close }),
 		});
 		await mockPi.hooks.session_shutdown({}, createLifecycleCtx().ctx);
 		expect(clearScheduledUpdate).toHaveBeenCalledTimes(1);
+		expect(close).toHaveBeenCalledTimes(1);
 	});
 
 	test("session_shutdown unsubscribes previous terminal listener", async () => {

@@ -27,6 +27,7 @@ export interface SearchBackend {
 	scheduleUpdate(): void;
 	runUpdateNow(): Promise<void>;
 	clearScheduledUpdate(): void;
+	close(): Promise<void>;
 	getUpdateMode(): "background" | "manual" | "off";
 }
 
@@ -77,7 +78,16 @@ function getUpdateMode(): "background" | "manual" | "off" {
 }
 
 function loadQmdSdk(): Promise<QmdSdkModule> {
-	return import("@tobilu/qmd") as Promise<QmdSdkModule>;
+	return import("@tobilu/qmd").catch((err) => {
+		throw new Error(
+			`qmd SDK unavailable (${err instanceof Error ? err.message : String(err)}). Ensure pi-memory is installed with optional dependencies and run under Node 22+ when search is enabled.`,
+		);
+	}) as Promise<QmdSdkModule>;
+}
+
+function isEmbeddingsError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return /embed|embedding|vector|model not|no model|index not/i.test(message);
 }
 
 function normalizeSearchResult(result: any, fallbackText?: string): QmdSearchResult {
@@ -119,6 +129,9 @@ export function createQmdSearchBackend(options: QmdSearchBackendOptions = {}): S
 		if (!storePromise) {
 			fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 			storePromise = loadQmd().then((qmd) => qmd.createStore({ dbPath, config: getConfig() }));
+			storePromise.catch(() => {
+				storePromise = null;
+			});
 		}
 		return storePromise;
 	}
@@ -161,7 +174,7 @@ export function createQmdSearchBackend(options: QmdSearchBackendOptions = {}): S
 				const results = await store.searchVector(query, { collection: COLLECTION_NAME, limit });
 				return { results: await normalizeResults(results), needsEmbed: false };
 			} catch (err) {
-				if (/embed/i.test(err instanceof Error ? err.message : String(err))) {
+				if (isEmbeddingsError(err)) {
 					return { results: [], needsEmbed: true };
 				}
 				throw err;
@@ -171,7 +184,7 @@ export function createQmdSearchBackend(options: QmdSearchBackendOptions = {}): S
 			const results = await store.search({ query, collection: COLLECTION_NAME, limit, rerank: true });
 			return { results: await normalizeResults(results), needsEmbed: false };
 		} catch (err) {
-			if (/embed/i.test(err instanceof Error ? err.message : String(err))) {
+			if (isEmbeddingsError(err)) {
 				return { results: [], needsEmbed: true };
 			}
 			throw err;
@@ -214,7 +227,7 @@ export function createQmdSearchBackend(options: QmdSearchBackendOptions = {}): S
 				if (results.length === 0) return "";
 				const snippets = results
 					.map((result) => {
-						const text = result.content ?? result.chunk ?? result.snippet ?? "";
+						const text = result.snippet ?? "";
 						if (!text.trim()) return null;
 						const filePath = result.path ?? result.file;
 						const filePart = filePath ? `_${filePath}_` : "";
@@ -251,16 +264,31 @@ export function createQmdSearchBackend(options: QmdSearchBackendOptions = {}): S
 			}, 500);
 		},
 		async runUpdateNow() {
+			this.clearScheduledUpdate();
 			if (!(await this.ensureReadyForUpdate())) return;
 			try {
 				const store = await getStore();
 				await store.update({ collections: [COLLECTION_NAME] });
-			} catch {}
+			} catch (err) {
+				console.debug("pi-memory: qmd update now failed", err instanceof Error ? err.message : String(err));
+			}
 		},
 		clearScheduledUpdate() {
 			if (updateTimer) {
 				clearTimeout(updateTimer);
 				updateTimer = null;
+			}
+		},
+		async close() {
+			this.clearScheduledUpdate();
+			if (!storePromise) return;
+			const store = await storePromise.catch(() => null);
+			storePromise = null;
+			available = null;
+			try {
+				await store?.close();
+			} catch (err) {
+				console.debug("pi-memory: store close failed", err instanceof Error ? err.message : String(err));
 			}
 		},
 		getUpdateMode() {

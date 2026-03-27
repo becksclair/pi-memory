@@ -82,14 +82,15 @@ describe("compatibility: qmd fallback", () => {
 				scheduleUpdate: () => {},
 				runUpdateNow: async () => {},
 				clearScheduledUpdate: () => {},
+				close: async () => {},
 				getUpdateMode: () => "background",
 			} as any,
 		});
 
 		const result = await mockPi.tools.memory_search.execute("call1", { query: "test" }, null, null, {});
 		expect(result.isError).toBe(true);
-		expect(result.content[0].text).toContain("memory_search requires qmd");
-		expect(result.content[0].text).toContain("qmd collection add");
+		expect(result.content[0].text).toContain("memory_search requires qmd search support");
+		expect(result.content[0].text).toContain("Node 22+");
 	});
 });
 

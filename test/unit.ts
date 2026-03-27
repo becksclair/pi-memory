@@ -101,6 +101,7 @@ function createSearchBackendStub(overrides?: Record<string, unknown>) {
 		scheduleUpdate: () => {},
 		runUpdateNow: async () => {},
 		clearScheduledUpdate: () => {},
+		close: async () => {},
 		getUpdateMode: () => "background" as const,
 		...overrides,
 	};

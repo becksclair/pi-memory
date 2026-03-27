@@ -1,18 +1,4 @@
 const { spawnSync } = require("node:child_process");
-const path = require("node:path");
-
-function hasQmd() {
-	const result = spawnSync("qmd", ["status"], {
-		stdio: "ignore",
-		shell: process.platform === "win32",
-	});
-	return result.status === 0;
-}
-
-function memoryDir() {
-	const home = process.env.HOME ?? process.env.USERPROFILE ?? "~";
-	return path.join(home, ".pi", "agent", "memory");
-}
 
 function configureGitHooks() {
 	const result = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
@@ -32,13 +18,5 @@ function configureGitHooks() {
 
 configureGitHooks();
 
-if (!hasQmd()) {
-	const dir = memoryDir();
-	console.log("\npi-memory: qmd not found (required for `memory_search`).\n");
-	console.log("Install qmd (requires Bun):");
-	console.log("  bun install -g https://github.com/tobi/qmd");
-	console.log("  # ensure ~/.bun/bin is in your PATH\n");
-	console.log("Then set up the collection (one-time):");
-	console.log(`  qmd collection add ${dir} --name pi-memory`);
-	console.log("  qmd embed\n");
-}
+console.log("pi-memory: memory_search uses the bundled qmd SDK with a local index.");
+console.log("Optional: install the qmd CLI separately if you want manual `qmd embed` runs for semantic/deep search.");

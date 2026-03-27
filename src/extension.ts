@@ -101,6 +101,7 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			}
 		} finally {
 			runtime.searchBackend.clearScheduledUpdate();
+			await runtime.searchBackend.close();
 		}
 	});
 

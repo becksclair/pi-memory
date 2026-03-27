@@ -89,14 +89,18 @@ export function _clearUpdateTimer() {
 
 export function qmdInstallInstructions(): string {
 	return [
-		"memory_search requires qmd.",
+		"memory_search requires qmd search support.",
 		"",
-		"Install qmd (requires Bun):",
-		`  bun install -g ${QMD_REPO_URL}`,
-		"  # ensure ~/.bun/bin is in your PATH",
+		"pi-memory now uses the bundled qmd SDK with a local index under:",
+		`  ${getMemoryDir()}/search/qmd.sqlite`,
 		"",
-		"Then set up the collection (one-time):",
-		`  qmd collection add ${getMemoryDir()} --name pi-memory`,
+		"If search is unavailable, reinstall pi-memory with optional dependencies and run under Node 22+.",
+		"",
+		"Optional: install the qmd CLI if you want manual embedding runs:",
+		"  npm install -g @tobilu/qmd",
+		`  # or: bun install -g ${QMD_REPO_URL}`,
+		"",
+		"Then, when semantic/deep search asks for embeddings:",
 		"  qmd embed",
 	].join("\n");
 }

@@ -66,6 +66,33 @@ describe("qmd sdk backend", () => {
 	beforeEach(setupTmpDir);
 	afterEach(cleanupTmpDir);
 
+	test("retries store creation after an initialization failure", async () => {
+		let attempts = 0;
+		const backend = createQmdSearchBackend({
+			loadQmd: (async () => ({
+				createStore: async () => {
+					attempts += 1;
+					if (attempts === 1) throw new Error("boom");
+					return {
+						searchLex: async () => [{ displayPath: "MEMORY.md", score: 1, snippet: "ok" }],
+						searchVector: async () => [],
+						search: async () => [],
+						getDocumentBody: async () => null,
+						update: async () => ({}),
+						close: async () => {},
+					};
+				},
+			})) as any,
+		});
+
+		await expect(backend.isAvailable()).resolves.toBe(false);
+		await expect(backend.search("keyword", "ok", 1)).resolves.toEqual({
+			results: [{ path: "MEMORY.md", file: undefined, score: 1, snippet: "ok", title: undefined }],
+			needsEmbed: false,
+		});
+		expect(attempts).toBe(2);
+	});
+
 	test("createQmdSearchBackend uses local dbPath and inline config", async () => {
 		let createStoreArgs: any;
 		const backend = createQmdSearchBackend({
@@ -116,6 +143,7 @@ describe("qmd sdk backend", () => {
 				scheduleUpdate: () => {},
 				runUpdateNow: async () => {},
 				clearScheduledUpdate: () => {},
+				close: async () => {},
 				getUpdateMode: () => "background",
 			} as any,
 		});
@@ -146,6 +174,7 @@ describe("qmd sdk backend", () => {
 				scheduleUpdate: () => {},
 				runUpdateNow: async () => {},
 				clearScheduledUpdate: () => {},
+				close: async () => {},
 				getUpdateMode: () => "background",
 			} as any,
 		});

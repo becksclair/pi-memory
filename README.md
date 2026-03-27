@@ -4,7 +4,7 @@ Memory extension for [pi](https://github.com/mariozechner/pi-mono) with semantic
 
 Thanks to https://github.com/skyfallsin/pi-mem for inspiration.
 
-Persistent memory across coding sessions — long-term facts, daily logs, and a scratchpad checklist. Core memory works as plain markdown files. Optional qmd integration adds keyword, semantic, and hybrid search across all memory files, plus automatic selective injection of relevant past memories into every turn.
+Persistent memory across coding sessions — long-term facts, daily logs, and a scratchpad checklist. Core memory works as plain markdown files. Optional qmd-powered search adds keyword, semantic, and hybrid retrieval across all memory files, plus automatic selective injection of relevant past memories into every turn.
 
 ## Installation
 
@@ -14,10 +14,9 @@ pi install npm:pi-memory
 
 # Install from local checkout
 pi install ./pi-memory
-
-# Optional (enables `memory_search` + selective injection, requires Bun)
-command -v qmd >/dev/null 2>&1 || bun install -g https://github.com/tobi/qmd
 ```
+
+`memory_search` and automatic retrieval now use the bundled qmd SDK with a local index under `~/.pi/agent/memory/search/`. You do not need a global qmd collection for the normal path.
 
 Or copy to your extensions directory:
 
@@ -25,22 +24,21 @@ Or copy to your extensions directory:
 cp -r pi-memory ~/.pi/agent/extensions/pi-memory
 ```
 
-### Optional: Enable search with qmd
+### Optional: qmd CLI for manual maintenance
 
-When qmd is installed, the extension **automatically creates** the `pi-memory` collection and path contexts on first session start.
+The extension uses the qmd SDK internally and stores its SQLite index locally under `~/.pi/agent/memory/search/`.
+
+If you want the standalone qmd CLI for manual inspection or embedding runs, install it separately:
+
+```bash
+npm install -g @tobilu/qmd
+# or
+bun install -g @tobilu/qmd
+```
 
 Note: `memory_search` **semantic**/**deep** modes require vector embeddings. If you see a warning like “need embeddings”, run `qmd embed` once and retry.
 
-If you prefer manual setup:
-
-```bash
-qmd collection add ~/.pi/agent/memory --name pi-memory
-qmd context add /daily "Daily append-only work logs organized by date" -c pi-memory
-qmd context add / "Curated long-term memory: decisions, preferences, facts, lessons" -c pi-memory
-qmd embed
-```
-
-Without qmd, all core tools (write/read/scratchpad) work normally. Only `memory_search` and selective injection require qmd.
+Without the SDK loading successfully, core tools (write/read/scratchpad) still work normally. Only `memory_search` and selective injection degrade.
 
 ## Tools
 
@@ -125,10 +123,10 @@ This ensures in-progress context survives compaction and is visible in the next 
 
 - **Persistence**: Memory files are plain markdown on disk — readable, editable, and git-friendly.
 - **Tool response previews**: Write/scratchpad tools return size-capped previews instead of full file contents.
-- **qmd auto-setup**: On first session start with qmd available, the extension creates the collection and path contexts automatically.
-- **qmd re-indexing**: After every write, a debounced `qmd update` runs in the background (fire-and-forget, non-blocking) unless disabled via `PI_MEMORY_QMD_UPDATE`.
+- **qmd SDK backend**: Search uses a managed local qmd SDK store backed by `~/.pi/agent/memory/search/qmd.sqlite`.
+- **qmd re-indexing**: After every write, a debounced local index update runs in the background unless disabled via `PI_MEMORY_QMD_UPDATE`.
 - **qmd embeddings**: Semantic/deep search needs vector embeddings. If you see “need embeddings” warnings, run `qmd embed` once and retry.
-- **Graceful degradation**: If qmd is not installed, core tools work fine. `memory_search` returns install instructions.
+- **Graceful degradation**: If the qmd SDK cannot load, core tools still work. `memory_search` returns setup guidance.
 
 ### Configuration
 
@@ -168,7 +166,7 @@ All tests back up and restore existing memory files.
 
 ## Development
 
-This is a single-file extension (`index.ts`). No build step required — pi loads TypeScript directly.
+The public entrypoint is `index.ts`, which forwards to the modular implementation under `src/`. Pi still loads TypeScript directly; the build step is for typechecking.
 
 ```bash
 # Test with pi directly
