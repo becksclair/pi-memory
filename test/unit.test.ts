@@ -19,19 +19,29 @@ import {
 	_setBaseDir,
 	_setExecFileForTest,
 	_setQmdAvailable,
+	buildExitSummaryFallback,
 	buildMemoryContext,
+	buildPreview,
 	dailyPath,
 	ensureDirs,
+	ensureQmdAvailableForUpdate,
+	formatContextSection,
+	formatExitSummaryEntry,
+	formatPreviewBlock,
+	generateExitSummary,
+	getQmdUpdateMode,
 	nowTimestamp,
 	parseScratchpad,
 	qmdCollectionInstructions,
 	qmdInstallInstructions,
 	readFileSafe,
+	runQmdUpdateNow,
 	type ScratchpadItem,
 	scheduleQmdUpdate,
 	serializeScratchpad,
 	shortSessionId,
 	todayStr,
+	truncateText,
 	yesterdayStr,
 } from "../index.js";
 
@@ -81,6 +91,43 @@ function createMockCtx(sessionId = "abcdef1234567890") {
 			notify: mock(() => {}),
 		},
 	};
+}
+
+function createLifecycleCtx(options?: {
+	sessionId?: string;
+	branch?: Array<{ type: string; message?: any }>;
+	hasUI?: boolean;
+	isIdle?: boolean;
+	editorText?: string;
+	model?: { provider: string; id: string } | null;
+	apiKey?: string | undefined;
+}) {
+	let terminalHandler: ((data: unknown) => unknown) | null = null;
+	const unsubscribe = mock(() => {
+		terminalHandler = null;
+	});
+	const notify = mock(() => {});
+	const ctx = {
+		sessionManager: {
+			getSessionId: () => options?.sessionId ?? "abcdef1234567890",
+			getBranch: () => options?.branch ?? [],
+		},
+		hasUI: options?.hasUI ?? true,
+		isIdle: () => options?.isIdle ?? true,
+		model: options?.model === null ? undefined : (options?.model ?? undefined),
+		modelRegistry: {
+			getApiKey: async () => options?.apiKey,
+		},
+		ui: {
+			notify,
+			onTerminalInput: mock((handler: (data: unknown) => unknown) => {
+				terminalHandler = handler;
+				return unsubscribe;
+			}),
+			getEditorText: () => options?.editorText ?? "",
+		},
+	};
+	return { ctx, notify, unsubscribe, getTerminalHandler: () => terminalHandler };
 }
 
 // We need to import the default export to register tools
@@ -185,6 +232,10 @@ describe("dailyPath", () => {
 		const result = dailyPath("2026-02-15");
 		expect(result).toContain(path.join("daily", "2026-02-15.md"));
 	});
+
+	test("throws for invalid date", () => {
+		expect(() => dailyPath("../../../etc/passwd")).toThrow("Invalid daily log date");
+	});
 });
 
 describe("ensureDirs", () => {
@@ -202,6 +253,81 @@ describe("ensureDirs", () => {
 		ensureDirs();
 		ensureDirs(); // should not throw
 		expect(fs.existsSync(tmpDir)).toBe(true);
+	});
+});
+
+describe("preview helpers", () => {
+	test("truncateText middle mode keeps head and tail", () => {
+		const result = truncateText("abcdefghijklmnopqrstuvwxyz0123456789", 30, "middle");
+		expect(result.truncated).toBe(true);
+		expect(result.text).toContain("... (truncated) ...");
+	});
+
+	test("buildPreview reports truncation metadata", () => {
+		const result = buildPreview("one\ntwo\nthree\nfour", { maxLines: 2, maxChars: 100, mode: "start" });
+		expect(result.truncated).toBe(true);
+		expect(result.totalLines).toBe(4);
+		expect(result.previewLines).toBe(2);
+	});
+
+	test("formatPreviewBlock returns empty note for blank content", () => {
+		expect(formatPreviewBlock("Test", "   ", "start")).toBe("Test: empty.");
+	});
+
+	test("formatContextSection returns empty string for blank content", () => {
+		expect(formatContextSection("Label", "   ", "start", 10, 100)).toBe("");
+	});
+});
+
+describe("exit summary helpers", () => {
+	test("buildExitSummaryFallback includes provided error", () => {
+		const result = buildExitSummaryFallback("No API key");
+		expect(result).toContain("Auto-summary unavailable: No API key.");
+		expect(result).toContain("### Decisions");
+	});
+
+	test("formatExitSummaryEntry formats /quit reason", () => {
+		const result = formatExitSummaryEntry("### Notes\n- Done.", "slash-quit", "abcdef12", "2026-03-27 10:00:00");
+		expect(result).toContain("## Session Summary (auto, exit: /quit)");
+		expect(result).toContain("<!-- 2026-03-27 10:00:00 [abcdef12] -->");
+	});
+});
+
+describe("generateExitSummary", () => {
+	test("returns no summary when session manager has no branch reader", async () => {
+		await expect(generateExitSummary({ sessionManager: {} } as any)).resolves.toEqual({
+			summary: null,
+			hasMessages: false,
+		});
+	});
+
+	test("returns no summary when there are no messages", async () => {
+		const { ctx } = createLifecycleCtx({ branch: [{ type: "tool_call" }] });
+		await expect(generateExitSummary(ctx as any)).resolves.toEqual({ summary: null, hasMessages: false });
+	});
+
+	test("returns missing-model error when messages exist but no model is active", async () => {
+		const { ctx } = createLifecycleCtx({
+			branch: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } }],
+			model: null,
+		});
+		await expect(generateExitSummary(ctx as any)).resolves.toEqual({
+			summary: null,
+			error: "No active model",
+			hasMessages: true,
+		});
+	});
+
+	test("returns missing-api-key error when model is active without credentials", async () => {
+		const { ctx } = createLifecycleCtx({
+			branch: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } }],
+			model: { provider: "openai", id: "gpt-test" },
+			apiKey: undefined,
+		});
+		const result = await generateExitSummary(ctx as any);
+		expect(result.summary).toBeNull();
+		expect(result.hasMessages).toBe(true);
+		expect(result.error).toContain("No API key for openai/gpt-test");
 	});
 });
 
@@ -420,10 +546,15 @@ describe("qmdCollectionInstructions", () => {
 });
 
 describe("scheduleQmdUpdate", () => {
+	const originalMode = process.env.PI_MEMORY_QMD_UPDATE;
+
 	beforeEach(() => {
+		delete process.env.PI_MEMORY_QMD_UPDATE;
 		_clearUpdateTimer();
 	});
 	afterEach(() => {
+		if (originalMode === undefined) delete process.env.PI_MEMORY_QMD_UPDATE;
+		else process.env.PI_MEMORY_QMD_UPDATE = originalMode;
 		_clearUpdateTimer();
 		_setQmdAvailable(false);
 	});
@@ -447,10 +578,61 @@ describe("scheduleQmdUpdate", () => {
 		const firstTimer = _getUpdateTimer();
 		scheduleQmdUpdate();
 		const secondTimer = _getUpdateTimer();
-		// Timer should be replaced (different reference)
 		expect(secondTimer).not.toBeNull();
 		expect(firstTimer).not.toBe(secondTimer);
 		_clearUpdateTimer();
+	});
+
+	test("respects manual mode", () => {
+		process.env.PI_MEMORY_QMD_UPDATE = "manual";
+		_setQmdAvailable(true);
+		expect(getQmdUpdateMode()).toBe("manual");
+		scheduleQmdUpdate();
+		expect(_getUpdateTimer()).toBeNull();
+	});
+
+	test("falls back to background for invalid mode", () => {
+		process.env.PI_MEMORY_QMD_UPDATE = "nonsense";
+		expect(getQmdUpdateMode()).toBe("background");
+	});
+});
+
+describe("qmd immediate update helpers", () => {
+	afterEach(() => {
+		_resetExecFileForTest();
+		_setQmdAvailable(false);
+	});
+
+	test("runQmdUpdateNow executes update even in manual mode when qmd is available", async () => {
+		const originalMode = process.env.PI_MEMORY_QMD_UPDATE;
+		process.env.PI_MEMORY_QMD_UPDATE = "manual";
+		_setQmdAvailable(true);
+		const calls: string[][] = [];
+		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
+			calls.push([file, ...args]);
+			cb(null, "", "");
+		}) as any);
+
+		await runQmdUpdateNow();
+		expect(calls).toEqual([["qmd", "update"]]);
+
+		if (originalMode === undefined) delete process.env.PI_MEMORY_QMD_UPDATE;
+		else process.env.PI_MEMORY_QMD_UPDATE = originalMode;
+	});
+
+	test("ensureQmdAvailableForUpdate detects qmd regardless of update mode", async () => {
+		const originalMode = process.env.PI_MEMORY_QMD_UPDATE;
+		process.env.PI_MEMORY_QMD_UPDATE = "off";
+		_setQmdAvailable(false);
+		_setExecFileForTest(((file: string, _args: string[], _opts: any, cb: any) => {
+			if (file !== "qmd") return cb(new Error("unexpected"), "", "");
+			cb(null, "", "");
+		}) as any);
+
+		await expect(ensureQmdAvailableForUpdate()).resolves.toBe(true);
+
+		if (originalMode === undefined) delete process.env.PI_MEMORY_QMD_UPDATE;
+		else process.env.PI_MEMORY_QMD_UPDATE = originalMode;
 	});
 });
 
@@ -584,6 +766,30 @@ describe("memory_write tool", () => {
 		expect(content).toContain("Old");
 		expect(content).toContain("New");
 		expect(result.details.mode).toBe("append");
+	});
+
+	test("includes qmd update mode in details", async () => {
+		const ctx = createMockCtx();
+		const result = await tools.memory_write.execute(
+			"call1",
+			{ target: "daily", content: "Did some work" },
+			null,
+			null,
+			ctx,
+		);
+		expect(result.details.qmdUpdateMode).toBe("background");
+	});
+
+	test("returns friendly error when tool context is unavailable", async () => {
+		const result = await tools.memory_write.execute(
+			"call1",
+			{ target: "daily", content: "Did some work" },
+			null,
+			null,
+			null,
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0].text).toContain("context unavailable");
 	});
 });
 
@@ -736,6 +942,24 @@ describe("scratchpad tool", () => {
 		expect(items[0].done).toBe(true);
 		expect(items[1].done).toBe(false);
 	});
+
+	test("includes qmd update mode in details", async () => {
+		const ctx = createMockCtx();
+		const result = await tools.scratchpad.execute("call1", { action: "add", text: "Fix login bug" }, null, null, ctx);
+		expect(result.details.qmdUpdateMode).toBe("background");
+	});
+
+	test("returns friendly error when tool context is unavailable", async () => {
+		const result = await tools.scratchpad.execute(
+			"call1",
+			{ action: "add", text: "Fix login bug" },
+			null,
+			null,
+			null,
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0].text).toContain("context unavailable");
+	});
 });
 
 // ==========================================================================
@@ -819,6 +1043,17 @@ describe("memory_read tool", () => {
 	test("read daily when file does not exist", async () => {
 		const result = await tools.memory_read.execute("c1", { target: "daily", date: "1999-01-01" }, null, null, {});
 		expect(result.content[0].text).toContain("No daily log for 1999-01-01");
+	});
+
+	test("rejects invalid daily log date", async () => {
+		const result = await tools.memory_read.execute(
+			"c1",
+			{ target: "daily", date: "../../../etc/passwd" },
+			null,
+			null,
+			{},
+		);
+		expect(result.content[0].text).toContain("Invalid date format");
 	});
 
 	// -- list --
@@ -934,7 +1169,7 @@ describe("lifecycle hooks", () => {
 	test("before_agent_start injects memory into system prompt", async () => {
 		fs.writeFileSync(path.join(tmpDir, "MEMORY.md"), "Remember this", "utf-8");
 		const event = { systemPrompt: "base prompt" };
-		const result = await hooks.before_agent_start(event, {});
+		const result = (await hooks.before_agent_start(event, {})) as { systemPrompt: string };
 		expect(result).toBeDefined();
 		expect(result.systemPrompt).toContain("base prompt");
 		expect(result.systemPrompt).toContain("Remember this");
@@ -944,26 +1179,149 @@ describe("lifecycle hooks", () => {
 	test("before_agent_start includes usage instructions", async () => {
 		fs.writeFileSync(path.join(tmpDir, "MEMORY.md"), "Some memory", "utf-8");
 		const event = { systemPrompt: "" };
-		const result = await hooks.before_agent_start(event, {});
+		const result = (await hooks.before_agent_start(event, {})) as { systemPrompt: string };
 		expect(result.systemPrompt).toContain("memory_write");
 		expect(result.systemPrompt).toContain("memory_search");
 		expect(result.systemPrompt).toContain("scratchpad");
 	});
 
-	// -- session_shutdown --
+	// -- session_start / input / session_shutdown --
+
+	test("session_start notifies when qmd is unavailable", async () => {
+		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
+			if (file === "qmd" && args[0] === "status") return cb(new Error("missing"), "", "");
+			cb(new Error("unexpected"), "", "");
+		}) as any);
+		const { ctx, notify, getTerminalHandler } = createLifecycleCtx();
+		try {
+			await hooks.session_start({}, ctx);
+			expect(notify).toHaveBeenCalled();
+			expect(String(notify.mock.calls[0]?.[0])).toContain("memory_search requires qmd");
+			expect(getTerminalHandler()).toBeTypeOf("function");
+		} finally {
+			_resetExecFileForTest();
+		}
+	});
+
+	test("session_start sets up qmd collection when missing", async () => {
+		const calls: string[][] = [];
+		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
+			calls.push([file, ...args]);
+			if (args[0] === "status") return cb(null, "", "");
+			if (args[0] === "collection" && args[1] === "list") return cb(null, "[]", "");
+			return cb(null, "", "");
+		}) as any);
+		try {
+			await hooks.session_start({}, createLifecycleCtx().ctx);
+			expect(calls).toContainEqual(["qmd", "collection", "add", tmpDir, "--name", "pi-memory"]);
+			expect(calls).toContainEqual([
+				"qmd",
+				"context",
+				"add",
+				"/daily",
+				"Daily append-only work logs organized by date",
+				"-c",
+				"pi-memory",
+			]);
+		} finally {
+			_resetExecFileForTest();
+		}
+	});
+
+	test("session_start skips qmd setup when collection already exists", async () => {
+		const calls: string[][] = [];
+		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
+			calls.push([file, ...args]);
+			if (args[0] === "status") return cb(null, "", "");
+			if (args[0] === "collection" && args[1] === "list") return cb(null, '[{"name":"pi-memory"}]', "");
+			return cb(null, "", "");
+		}) as any);
+		try {
+			await hooks.session_start({}, createLifecycleCtx().ctx);
+			expect(calls.some((call) => call[1] === "collection" && call[2] === "add")).toBe(false);
+		} finally {
+			_resetExecFileForTest();
+		}
+	});
+
+	test("input marks slash-quit only for non-extension input", async () => {
+		const ctx = createLifecycleCtx({
+			branch: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } }],
+		}).ctx;
+		await hooks.input({ source: "extension", text: "/quit" }, ctx);
+		await hooks.session_shutdown({}, ctx);
+		let content = readFileSafe(dailyPath(todayStr())) ?? "";
+		expect(content).toContain("exit: session-end");
+
+		fs.rmSync(dailyPath(todayStr()), { force: true });
+		await hooks.input({ source: "user", text: " /quit " }, ctx);
+		await hooks.session_shutdown({}, ctx);
+		content = readFileSafe(dailyPath(todayStr())) ?? "";
+		expect(content).toContain("exit: /quit");
+	});
+
+	test("session_start terminal handler marks ctrl+d only when idle and editor is empty", async () => {
+		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
+			if (file === "qmd" && args[0] === "status") return cb(new Error("missing"), "", "");
+			cb(new Error("unexpected"), "", "");
+		}) as any);
+		const ctxBundle = createLifecycleCtx({
+			branch: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } }],
+		});
+		try {
+			await hooks.session_start({}, ctxBundle.ctx);
+			const handler = ctxBundle.getTerminalHandler();
+			expect(handler).toBeTypeOf("function");
+			handler?.("hello");
+			handler?.("\u0004");
+			await hooks.session_shutdown({}, ctxBundle.ctx);
+			const content = readFileSafe(dailyPath(todayStr())) ?? "";
+			expect(content).toContain("exit: ctrl+d");
+		} finally {
+			_resetExecFileForTest();
+		}
+	});
+
+	test("session_shutdown writes fallback summary when generation cannot use a model", async () => {
+		const { ctx } = createLifecycleCtx({
+			branch: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } }],
+			model: null,
+		});
+		await hooks.session_shutdown({}, ctx);
+		const content = readFileSafe(dailyPath(todayStr())) ?? "";
+		expect(content).toContain("## Session Summary");
+		expect(content).toContain("Auto-summary unavailable: No active model.");
+	});
+
+	test("session_shutdown does not write a summary when there are no messages", async () => {
+		await hooks.session_shutdown({}, createLifecycleCtx({ branch: [] }).ctx);
+		expect(readFileSafe(dailyPath(todayStr()))).toBeNull();
+	});
 
 	test("session_shutdown clears update timer", async () => {
 		_setQmdAvailable(true);
 		scheduleQmdUpdate();
 		expect(_getUpdateTimer()).not.toBeNull();
-		await hooks.session_shutdown({}, {});
+		await hooks.session_shutdown({}, createLifecycleCtx().ctx);
 		expect(_getUpdateTimer()).toBeNull();
 	});
 
-	test("session_shutdown is safe when no timer exists", async () => {
-		_clearUpdateTimer();
-		// Should not throw
-		await hooks.session_shutdown({}, {});
+	test("session_shutdown unsubscribes previous terminal listener", async () => {
+		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
+			if (file === "qmd" && args[0] === "status") return cb(new Error("missing"), "", "");
+			cb(new Error("unexpected"), "", "");
+		}) as any);
+		const first = createLifecycleCtx();
+		const second = createLifecycleCtx();
+		try {
+			await hooks.session_start({}, first.ctx);
+			await hooks.session_start({}, second.ctx);
+			expect(first.unsubscribe).toHaveBeenCalledTimes(1);
+			await hooks.session_shutdown({}, second.ctx);
+			expect(second.unsubscribe).toHaveBeenCalledTimes(1);
+		} finally {
+			_resetExecFileForTest();
+		}
 	});
 
 	// -- session_before_compact --

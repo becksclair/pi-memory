@@ -4,6 +4,9 @@
 	"description": "Pi coding agent extension for memory with qmd-powered semantic search across daily logs, long-term memory, and scratchpad",
 	"main": "index.ts",
 	"type": "module",
+	"exports": {
+		".": "./index.ts"
+	},
 	"keywords": [
 		"pi",
 		"pi-coding-agent",
@@ -31,6 +34,7 @@
 	"homepage": "https://github.com/jayzeng/pi-memory#readme",
 	"files": [
 		"index.ts",
+		"src",
 		"scripts",
 		"README.md",
 		"LICENSE"
@@ -42,7 +46,11 @@
 		"postinstall": "node scripts/postinstall.cjs",
 		"build": "tsc -p tsconfig.json --noEmit",
 		"lint": "biome check .",
-		"test": "npx tsx test/e2e.ts"
+		"test": "bun test test/unit test/unit.test.ts && bun test/unit.ts",
+		"test:unit": "bun test test/unit test/unit.test.ts && bun test/unit.ts",
+		"test:e2e": "npx tsx test/e2e.ts",
+		"test:eval": "npx tsx test/eval-recall.ts",
+		"test:all": "npm run lint && npm run build && npm run test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.0",

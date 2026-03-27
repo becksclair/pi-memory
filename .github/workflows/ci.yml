@@ -16,6 +16,9 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
       - run: npm ci
       - run: npm run lint
 
@@ -27,10 +30,27 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
       - run: npm ci
       - run: npm run build
 
   test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - run: npm test
+
+  e2e:
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -42,10 +62,13 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
       - run: npm ci
       - name: Run e2e tests
         if: ${{ env.OPENAI_API_KEY != '' }}
-        run: npm test
+        run: npm run test:e2e
       - name: Skip e2e tests (missing OPENAI_API_KEY)
         if: ${{ env.OPENAI_API_KEY == '' }}
         run: echo "Skipping e2e tests. Add an OPENAI_API_KEY repository secret to enable."
