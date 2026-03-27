@@ -329,6 +329,34 @@ function formatExitSummaryEntry(
 	return [`<!-- ${timestamp} [${sessionId}] -->`, header, "", summary.trim()].join("\n");
 }
 
+function isExtensionContextLike(value: unknown): value is ExtensionContext {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<ExtensionContext>;
+	return !!candidate.sessionManager && typeof candidate.isIdle === "function";
+}
+
+function getToolExecutionContext(third: unknown, fourth: unknown, fifth: unknown): ExtensionContext {
+	if (isExtensionContextLike(fifth)) return fifth;
+	if (isExtensionContextLike(fourth)) return fourth;
+	if (isExtensionContextLike(third)) return third;
+	throw new Error("Could not resolve tool execution context from Pi runtime arguments.");
+}
+
+async function getModelApiKey(ctx: ExtensionContext, model: { provider: string; id: string }) {
+	const registry = ctx.modelRegistry as unknown as {
+		getApiKey?: (candidateModel: unknown) => Promise<string | undefined>;
+		getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
+	};
+
+	if (typeof registry.getApiKey === "function") {
+		return registry.getApiKey(model);
+	}
+	if (typeof registry.getApiKeyForProvider === "function") {
+		return registry.getApiKeyForProvider(model.provider);
+	}
+	throw new Error("Pi modelRegistry does not expose getApiKey() or getApiKeyForProvider().");
+}
+
 async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSummaryResult> {
 	const branch = ctx.sessionManager.getBranch();
 	const messages = branch
@@ -343,7 +371,7 @@ async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSummaryRe
 		return { summary: null, error: "No active model", hasMessages: true };
 	}
 
-	const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+	const apiKey = await getModelApiKey(ctx, ctx.model);
 	if (!apiKey) {
 		return {
 			summary: null,
@@ -984,8 +1012,9 @@ export default function (pi: ExtensionAPI) {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, third, fourth, fifth) {
 			ensureDirs();
+			const ctx = getToolExecutionContext(third, fourth, fifth);
 			const { target, content, mode } = params;
 			const sid = shortSessionId(ctx.sessionManager.getSessionId());
 			const ts = nowTimestamp();
@@ -1099,8 +1128,9 @@ export default function (pi: ExtensionAPI) {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, third, fourth, fifth) {
 			ensureDirs();
+			const ctx = getToolExecutionContext(third, fourth, fifth);
 			const { action, text } = params;
 			const sid = shortSessionId(ctx.sessionManager.getSessionId());
 			const ts = nowTimestamp();
@@ -1286,7 +1316,7 @@ export default function (pi: ExtensionAPI) {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, _third, _fourth, _fifth) {
 			ensureDirs();
 			const { target, date } = params;
 
@@ -1392,7 +1422,7 @@ export default function (pi: ExtensionAPI) {
 			),
 			limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, _third, _fourth, _fifth) {
 			if (!qmdAvailable) {
 				// Re-check on demand in case qmd was installed after session start.
 				qmdAvailable = await detectQmd();
