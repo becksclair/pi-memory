@@ -50,6 +50,7 @@ const PI_E2E_MODEL = process.env.PI_E2E_MODEL;
 interface PiResult {
 	exitCode: number;
 	stdout: string;
+	stderr: string;
 	events: any[];
 	textOutput: string;
 }
@@ -68,6 +69,7 @@ function runPi(prompt: string, opts?: { timeout?: number; textMode?: boolean }):
 		`pi -p --mode ${mode}${providerArg}${modelArg} --no-extensions -e "${EXTENSION_PATH}" --no-session`;
 
 	let stdout: string;
+	let stderr = "";
 	let exitCode = 0;
 
 	try {
@@ -79,6 +81,7 @@ function runPi(prompt: string, opts?: { timeout?: number; textMode?: boolean }):
 		});
 	} catch (err: any) {
 		stdout = err.stdout ?? "";
+		stderr = err.stderr ?? "";
 		exitCode = err.status ?? 1;
 	}
 
@@ -107,7 +110,38 @@ function runPi(prompt: string, opts?: { timeout?: number; textMode?: boolean }):
 		textOutput = stdout.trim();
 	}
 
-	return { exitCode, stdout, events, textOutput };
+	return { exitCode, stdout, stderr, events, textOutput };
+}
+
+function summarizePiFailure(result: PiResult): string {
+	const stderr = result.stderr.trim();
+	const stdout = result.stdout.trim();
+	const combined = [stderr, stdout].filter(Boolean).join("\n");
+	const lines = combined
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const lastLine = lines.at(-1);
+
+	if (!lastLine) {
+		return `pi exited with code ${result.exitCode} without output`;
+	}
+
+	const jsonStart = lastLine.indexOf("{");
+	if (jsonStart >= 0) {
+		try {
+			const parsed = JSON.parse(lastLine.slice(jsonStart));
+			const errorType = parsed?.error?.type ?? parsed?.type;
+			const message = parsed?.error?.message ?? parsed?.message;
+			if (errorType || message) {
+				return `pi exited with code ${result.exitCode}: ${[errorType, message].filter(Boolean).join(" - ")}`;
+			}
+		} catch {
+			// Fall through to plain-text summary.
+		}
+	}
+
+	return `pi exited with code ${result.exitCode}: ${lastLine.slice(0, 300)}`;
 }
 
 /** Back up a file if it exists. */
@@ -166,16 +200,17 @@ function test(name: string, fn: () => void) {
 // Preflight
 // ---------------------------------------------------------------------------
 
-function checkPi(): boolean {
-	try {
-		const result = runPi("Say exactly: PREFLIGHT_OK", {
-			timeout: 60_000,
-			textMode: true,
-		});
-		return result.exitCode === 0 && result.textOutput.includes("PREFLIGHT_OK");
-	} catch {
-		return false;
+function checkPi(): { ok: boolean; reason?: string } {
+	const result = runPi("Say exactly: PREFLIGHT_OK", {
+		timeout: 60_000,
+		textMode: true,
+	});
+
+	if (result.exitCode === 0 && result.textOutput.includes("PREFLIGHT_OK")) {
+		return { ok: true };
 	}
+
+	return { ok: false, reason: summarizePiFailure(result) };
 }
 
 function checkQmdAvailable(): boolean {
@@ -550,10 +585,10 @@ function main() {
 
 	// Preflight: check pi is available
 	process.stdout.write("Preflight: checking pi CLI ... ");
-	const piAvailable = checkPi();
-	if (!piAvailable) {
+	const piCheck = checkPi();
+	if (!piCheck.ok) {
 		console.log("\x1b[31mFAILED\x1b[0m");
-		console.error("Ensure `pi` is on PATH and an API key is configured.");
+		console.error(piCheck.reason ?? "Ensure `pi` is on PATH and an API key is configured.");
 		process.exit(1);
 	}
 	console.log("\x1b[32mOK\x1b[0m\n");
