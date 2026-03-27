@@ -31,6 +31,7 @@ export {
 	searchRelevantMemories,
 	setupQmdCollection,
 } from "../qmd/legacy-cli.js";
+export { createQmdSearchBackend, type QmdSearchResult, type SearchBackend } from "../qmd/search-backend.js";
 export {
 	buildPreview,
 	formatContextSection,

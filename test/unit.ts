@@ -91,6 +91,21 @@ function mockCtx(sessionId = "abcdef1234567890") {
 	};
 }
 
+function createSearchBackendStub(overrides?: Record<string, unknown>) {
+	return {
+		isAvailable: async () => true,
+		setup: async () => true,
+		search: async () => ({ results: [], needsEmbed: false }),
+		searchRelevantMemories: async () => "",
+		ensureReadyForUpdate: async () => true,
+		scheduleUpdate: () => {},
+		runUpdateNow: async () => {},
+		clearScheduledUpdate: () => {},
+		getUpdateMode: () => "background" as const,
+		...overrides,
+	};
+}
+
 function writeFile(relPath: string, content: string) {
 	const full = path.join(tmpDir, relPath);
 	fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -403,24 +418,15 @@ async function testSearchRelevantMemoriesUsesSnippetAndFileFields() {
 async function testMemorySearchFormatsFileAndSnippet() {
 	setup();
 	try {
-		_setQmdAvailable(true);
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			if (file !== "qmd") return cb(new Error(`Unexpected command: ${file}`), "", "");
-			if (args[0] === "collection" && args[1] === "list") {
-				return cb(null, JSON.stringify(["pi-memory"]), "");
-			}
-			if (args[0] === "search") {
-				return cb(
-					null,
-					JSON.stringify([{ file: "qmd://pi-memory/MEMORY.md", score: 0.5, snippet: "Token: UNIT123" }]),
-					"",
-				);
-			}
-			return cb(new Error(`Unexpected qmd args: ${args.join(" ")}`), "", "");
-		}) as any);
-
 		const pi = createMockPi();
-		registerExtension(pi as any);
+		registerExtension(pi as any, {
+			searchBackend: createSearchBackendStub({
+				search: async () => ({
+					results: [{ path: "MEMORY.md", score: 0.5, snippet: "Token: UNIT123" }],
+					needsEmbed: false,
+				}),
+			}),
+		});
 		const tool = pi.tools.memory_search;
 		const res = await tool.execute(
 			"toolcall",
@@ -430,10 +436,9 @@ async function testMemorySearchFormatsFileAndSnippet() {
 			mockCtx(),
 		);
 		const text = res.content?.[0]?.text ?? "";
-		assert(text.includes("qmd://pi-memory/MEMORY.md"), "Expected File line to include qmd path");
+		assert(text.includes("MEMORY.md"), "Expected File line to include memory path");
 		assert(text.includes("Token: UNIT123"), "Expected snippet content to appear");
 	} finally {
-		_setQmdAvailable(false);
 		teardown();
 	}
 }
@@ -441,24 +446,12 @@ async function testMemorySearchFormatsFileAndSnippet() {
 async function testMemorySearchSemanticNeedsEmbedHint() {
 	setup();
 	try {
-		_setQmdAvailable(true);
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			if (file !== "qmd") return cb(new Error(`Unexpected command: ${file}`), "", "");
-			if (args[0] === "collection" && args[1] === "list") {
-				return cb(null, JSON.stringify(["pi-memory"]), "");
-			}
-			if (args[0] === "vsearch") {
-				return cb(
-					null,
-					"No results found.",
-					"Warning: 4 documents (100%) need embeddings. Run 'qmd embed' for better results.",
-				);
-			}
-			return cb(new Error(`Unexpected qmd args: ${args.join(" ")}`), "", "");
-		}) as any);
-
 		const pi = createMockPi();
-		registerExtension(pi as any);
+		registerExtension(pi as any, {
+			searchBackend: createSearchBackendStub({
+				search: async () => ({ results: [], needsEmbed: true }),
+			}),
+		});
 		const tool = pi.tools.memory_search;
 		const res = await tool.execute(
 			"toolcall",
@@ -470,7 +463,6 @@ async function testMemorySearchSemanticNeedsEmbedHint() {
 		const text = res.content?.[0]?.text ?? "";
 		assert(text.toLowerCase().includes("qmd embed"), "Expected guidance to run qmd embed");
 	} finally {
-		_setQmdAvailable(false);
 		teardown();
 	}
 }

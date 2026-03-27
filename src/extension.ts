@@ -11,18 +11,8 @@ import {
 } from "./config/paths.js";
 import { buildMemoryContext } from "./memory/context.js";
 import { parseScratchpad } from "./memory/scratchpad.js";
-import {
-	_clearUpdateTimer,
-	_setQmdAvailable,
-	checkCollection,
-	detectQmd,
-	ensureQmdAvailableForUpdate,
-	qmdInstallInstructions,
-	runQmdUpdateNow,
-	scheduleQmdUpdate,
-	searchRelevantMemories,
-	setupQmdCollection,
-} from "./qmd/legacy-cli.js";
+import { qmdInstallInstructions } from "./qmd/legacy-cli.js";
+import { createQmdSearchBackend, type SearchBackend } from "./qmd/search-backend.js";
 import {
 	buildExitSummaryFallback,
 	type ExitSummaryReason,
@@ -37,17 +27,23 @@ import { createScratchpadTool } from "./tools/scratchpad.js";
 interface RuntimeState {
 	exitSummaryReason: ExitSummaryReason | null;
 	terminalInputUnsubscribe: (() => void) | null;
+	searchBackend: SearchBackend;
 }
 
-function createRuntimeState(): RuntimeState {
+interface RegisterExtensionOptions {
+	searchBackend?: SearchBackend;
+}
+
+function createRuntimeState(options?: RegisterExtensionOptions): RuntimeState {
 	return {
 		exitSummaryReason: null,
 		terminalInputUnsubscribe: null,
+		searchBackend: options?.searchBackend ?? createQmdSearchBackend(),
 	};
 }
 
-export default function registerExtension(pi: ExtensionAPI) {
-	const runtime = createRuntimeState();
+export default function registerExtension(pi: ExtensionAPI, options?: RegisterExtensionOptions) {
+	const runtime = createRuntimeState(options);
 
 	pi.on("session_start", async (_event, ctx) => {
 		runtime.exitSummaryReason = null;
@@ -66,8 +62,7 @@ export default function registerExtension(pi: ExtensionAPI) {
 			});
 		}
 
-		const available = await detectQmd();
-		_setQmdAvailable(available);
+		const available = await runtime.searchBackend.isAvailable();
 		if (!available) {
 			if (ctx.hasUI) {
 				ctx.ui.notify(qmdInstallInstructions(), "info");
@@ -75,10 +70,7 @@ export default function registerExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		const hasCollection = await checkCollection("pi-memory");
-		if (!hasCollection) {
-			await setupQmdCollection();
-		}
+		await runtime.searchBackend.setup();
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -103,12 +95,12 @@ export default function registerExtension(pi: ExtensionAPI) {
 					const existing = readFileSafe(filePath) ?? "";
 					const separator = existing.trim() ? "\n\n" : "";
 					fs.writeFileSync(filePath, existing + separator + entry, "utf-8");
-					await ensureQmdAvailableForUpdate();
-					await runQmdUpdateNow();
+					await runtime.searchBackend.ensureReadyForUpdate();
+					await runtime.searchBackend.runUpdateNow();
 				}
 			}
 		} finally {
-			_clearUpdateTimer();
+			runtime.searchBackend.clearScheduledUpdate();
 		}
 	});
 
@@ -121,7 +113,7 @@ export default function registerExtension(pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (event, _ctx) => {
 		const skipSearch = process.env.PI_MEMORY_NO_SEARCH === "1";
-		const searchResults = skipSearch ? "" : await searchRelevantMemories(event.prompt ?? "");
+		const searchResults = skipSearch ? "" : await runtime.searchBackend.searchRelevantMemories(event.prompt ?? "");
 		const memoryContext = buildMemoryContext(searchResults);
 		if (!memoryContext) return;
 
@@ -174,12 +166,12 @@ export default function registerExtension(pi: ExtensionAPI) {
 		const existing = readFileSafe(filePath) ?? "";
 		const separator = existing.trim() ? "\n\n" : "";
 		fs.writeFileSync(filePath, existing + separator + handoff, "utf-8");
-		await ensureQmdAvailableForUpdate();
-		scheduleQmdUpdate();
+		await runtime.searchBackend.ensureReadyForUpdate();
+		runtime.searchBackend.scheduleUpdate();
 	});
 
-	pi.registerTool(createMemoryWriteTool());
-	pi.registerTool(createScratchpadTool());
+	pi.registerTool(createMemoryWriteTool(runtime.searchBackend));
+	pi.registerTool(createScratchpadTool(runtime.searchBackend));
 	pi.registerTool(createMemoryReadTool());
-	pi.registerTool(createMemorySearchTool());
+	pi.registerTool(createMemorySearchTool(runtime.searchBackend));
 }

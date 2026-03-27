@@ -11,7 +11,7 @@ import {
 	shortSessionId,
 	todayStr,
 } from "../config/paths.js";
-import { ensureQmdAvailableForUpdate, getQmdUpdateMode, scheduleQmdUpdate } from "../qmd/legacy-cli.js";
+import type { SearchBackend } from "../qmd/search-backend.js";
 import { buildPreview, formatPreviewBlock } from "../shared/preview.js";
 import { getToolExecutionContext } from "../shared/tool-context.js";
 
@@ -26,7 +26,7 @@ function writeTextFile(filePath: string, content: string) {
 	}
 }
 
-export function createMemoryWriteTool(): RegisteredTool {
+export function createMemoryWriteTool(searchBackend: SearchBackend): RegisteredTool {
 	return {
 		name: "memory_write",
 		label: "Memory Write",
@@ -86,8 +86,8 @@ export function createMemoryWriteTool(): RegisteredTool {
 						details: {},
 					};
 				}
-				await ensureQmdAvailableForUpdate();
-				scheduleQmdUpdate();
+				await searchBackend.ensureReadyForUpdate();
+				searchBackend.scheduleUpdate();
 				return {
 					content: [{ type: "text", text: `Appended to daily log: ${filePath}${existingSnippet}` }],
 					details: {
@@ -96,7 +96,7 @@ export function createMemoryWriteTool(): RegisteredTool {
 						mode: "append",
 						sessionId: sid,
 						timestamp: ts,
-						qmdUpdateMode: getQmdUpdateMode(),
+						qmdUpdateMode: searchBackend.getUpdateMode(),
 						existingPreview,
 					},
 				};
@@ -123,8 +123,8 @@ export function createMemoryWriteTool(): RegisteredTool {
 						details: {},
 					};
 				}
-				await ensureQmdAvailableForUpdate();
-				scheduleQmdUpdate();
+				await searchBackend.ensureReadyForUpdate();
+				searchBackend.scheduleUpdate();
 				return {
 					content: [{ type: "text", text: `Overwrote MEMORY.md${existingSnippet}` }],
 					details: {
@@ -133,7 +133,7 @@ export function createMemoryWriteTool(): RegisteredTool {
 						mode: "overwrite",
 						sessionId: sid,
 						timestamp: ts,
-						qmdUpdateMode: getQmdUpdateMode(),
+						qmdUpdateMode: searchBackend.getUpdateMode(),
 						existingPreview,
 					},
 				};
@@ -149,8 +149,8 @@ export function createMemoryWriteTool(): RegisteredTool {
 					details: {},
 				};
 			}
-			await ensureQmdAvailableForUpdate();
-			scheduleQmdUpdate();
+			await searchBackend.ensureReadyForUpdate();
+			searchBackend.scheduleUpdate();
 			return {
 				content: [{ type: "text", text: `Appended to MEMORY.md${existingSnippet}` }],
 				details: {
@@ -159,7 +159,7 @@ export function createMemoryWriteTool(): RegisteredTool {
 					mode: "append",
 					sessionId: sid,
 					timestamp: ts,
-					qmdUpdateMode: getQmdUpdateMode(),
+					qmdUpdateMode: searchBackend.getUpdateMode(),
 					existingPreview,
 				},
 			};

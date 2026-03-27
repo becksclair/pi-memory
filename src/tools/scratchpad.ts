@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { ensureDirs, getScratchpadFile, nowTimestamp, readFileSafe, shortSessionId } from "../config/paths.js";
 import { parseScratchpad, serializeScratchpad } from "../memory/scratchpad.js";
-import { ensureQmdAvailableForUpdate, getQmdUpdateMode, scheduleQmdUpdate } from "../qmd/legacy-cli.js";
+import type { SearchBackend } from "../qmd/search-backend.js";
 import { buildPreview, formatPreviewBlock } from "../shared/preview.js";
 import { getToolExecutionContext } from "../shared/tool-context.js";
 
@@ -19,7 +19,7 @@ function writeTextFile(filePath: string, content: string) {
 	}
 }
 
-export function createScratchpadTool(): RegisteredTool {
+export function createScratchpadTool(searchBackend: SearchBackend): RegisteredTool {
 	return {
 		name: "scratchpad",
 		label: "Scratchpad",
@@ -106,8 +106,8 @@ export function createScratchpadTool(): RegisteredTool {
 						details: {},
 					};
 				}
-				await ensureQmdAvailableForUpdate();
-				scheduleQmdUpdate();
+				await searchBackend.ensureReadyForUpdate();
+				searchBackend.scheduleUpdate();
 				return {
 					content: [
 						{
@@ -119,7 +119,7 @@ export function createScratchpadTool(): RegisteredTool {
 						action,
 						sessionId: sid,
 						timestamp: ts,
-						qmdUpdateMode: getQmdUpdateMode(),
+						qmdUpdateMode: searchBackend.getUpdateMode(),
 						preview,
 					},
 				};
@@ -164,8 +164,8 @@ export function createScratchpadTool(): RegisteredTool {
 						details: {},
 					};
 				}
-				await ensureQmdAvailableForUpdate();
-				scheduleQmdUpdate();
+				await searchBackend.ensureReadyForUpdate();
+				searchBackend.scheduleUpdate();
 				return {
 					content: [
 						{
@@ -177,7 +177,7 @@ export function createScratchpadTool(): RegisteredTool {
 						action,
 						sessionId: sid,
 						timestamp: ts,
-						qmdUpdateMode: getQmdUpdateMode(),
+						qmdUpdateMode: searchBackend.getUpdateMode(),
 						preview,
 					},
 				};
@@ -201,8 +201,8 @@ export function createScratchpadTool(): RegisteredTool {
 						details: {},
 					};
 				}
-				await ensureQmdAvailableForUpdate();
-				scheduleQmdUpdate();
+				await searchBackend.ensureReadyForUpdate();
+				searchBackend.scheduleUpdate();
 				return {
 					content: [
 						{
@@ -213,7 +213,7 @@ export function createScratchpadTool(): RegisteredTool {
 					details: {
 						action,
 						removed,
-						qmdUpdateMode: getQmdUpdateMode(),
+						qmdUpdateMode: searchBackend.getUpdateMode(),
 						preview,
 					},
 				};

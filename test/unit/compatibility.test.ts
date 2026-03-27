@@ -7,7 +7,6 @@ import registerExtension, {
 	_resetBaseDir,
 	_resetExecFileForTest,
 	_setBaseDir,
-	_setExecFileForTest,
 	_setQmdAvailable,
 	buildMemoryContext,
 	ensureDirs,
@@ -71,14 +70,21 @@ describe("compatibility: buildMemoryContext", () => {
 });
 
 describe("compatibility: qmd fallback", () => {
-	test("memory_search still reports qmd install guidance when unavailable", async () => {
+	test("memory_search still reports qmd install guidance when backend is unavailable", async () => {
 		const mockPi = createMockPi();
-		registerExtension(mockPi.pi as any);
-		_setQmdAvailable(false);
-		_setExecFileForTest(((...args: any[]) => {
-			const callback = args[args.length - 1] as (err: Error | null, stdout: string, stderr: string) => void;
-			callback(new Error("qmd not found"), "", "");
-		}) as any);
+		registerExtension(mockPi.pi as any, {
+			searchBackend: {
+				isAvailable: async () => false,
+				setup: async () => false,
+				search: async () => ({ results: [], needsEmbed: false }),
+				searchRelevantMemories: async () => "",
+				ensureReadyForUpdate: async () => false,
+				scheduleUpdate: () => {},
+				runUpdateNow: async () => {},
+				clearScheduledUpdate: () => {},
+				getUpdateMode: () => "background",
+			} as any,
+		});
 
 		const result = await mockPi.tools.memory_search.execute("call1", { query: "test" }, null, null, {});
 		expect(result.isError).toBe(true);

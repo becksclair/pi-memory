@@ -130,6 +130,21 @@ function createLifecycleCtx(options?: {
 	return { ctx, notify, unsubscribe, getTerminalHandler: () => terminalHandler };
 }
 
+function createSearchBackendStub(overrides?: Record<string, unknown>) {
+	return {
+		isAvailable: async () => true,
+		setup: async () => true,
+		search: async () => ({ results: [], needsEmbed: false }),
+		searchRelevantMemories: async () => "",
+		ensureReadyForUpdate: async () => true,
+		scheduleUpdate: () => {},
+		runUpdateNow: async () => {},
+		clearScheduledUpdate: () => {},
+		getUpdateMode: () => "background" as const,
+		...overrides,
+	};
+}
+
 // We need to import the default export to register tools
 import registerExtension from "../index.js";
 
@@ -1106,22 +1121,15 @@ describe("memory_search tool", () => {
 		expect(tools.memory_search.name).toBe("memory_search");
 	});
 
-	test("returns error with setup instructions when qmd not fully configured", async () => {
-		const execStub = ((...args: any[]) => {
-			const callback = args[args.length - 1] as (err: Error | null, stdout: string, stderr: string) => void;
-			callback(new Error("qmd not found"), "", "");
-		}) as any;
+	test("returns error with setup instructions when search backend is unavailable", async () => {
+		const mockPi = createMockPi();
+		registerExtension(mockPi.pi as any, {
+			searchBackend: createSearchBackendStub({ isAvailable: async () => false }),
+		});
 
-		_setExecFileForTest(execStub);
-		_setQmdAvailable(false);
-
-		try {
-			const result = await tools.memory_search.execute("c1", { query: "test" }, null, null, {});
-			expect(result.isError).toBe(true);
-			expect(result.content[0].text).toContain("qmd");
-		} finally {
-			_resetExecFileForTest();
-		}
+		const result = await mockPi.tools.memory_search.execute("c1", { query: "test" }, null, null, {});
+		expect(result.isError).toBe(true);
+		expect(result.content[0].text).toContain("qmd");
 	});
 
 	test("defaults mode to keyword and limit to 5", () => {
@@ -1187,61 +1195,42 @@ describe("lifecycle hooks", () => {
 
 	// -- session_start / input / session_shutdown --
 
-	test("session_start notifies when qmd is unavailable", async () => {
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			if (file === "qmd" && args[0] === "status") return cb(new Error("missing"), "", "");
-			cb(new Error("unexpected"), "", "");
-		}) as any);
+	test("session_start notifies when search backend is unavailable", async () => {
+		const mockPi = createMockPi();
+		registerExtension(mockPi.pi as any, {
+			searchBackend: createSearchBackendStub({ isAvailable: async () => false }),
+		});
 		const { ctx, notify, getTerminalHandler } = createLifecycleCtx();
-		try {
-			await hooks.session_start({}, ctx);
-			expect(notify).toHaveBeenCalled();
-			expect(String(notify.mock.calls[0]?.[0])).toContain("memory_search requires qmd");
-			expect(getTerminalHandler()).toBeTypeOf("function");
-		} finally {
-			_resetExecFileForTest();
-		}
+		await mockPi.hooks.session_start({}, ctx);
+		expect(notify).toHaveBeenCalled();
+		expect(String(notify.mock.calls[0]?.[0])).toContain("memory_search requires qmd");
+		expect(getTerminalHandler()).toBeTypeOf("function");
 	});
 
-	test("session_start sets up qmd collection when missing", async () => {
-		const calls: string[][] = [];
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			calls.push([file, ...args]);
-			if (args[0] === "status") return cb(null, "", "");
-			if (args[0] === "collection" && args[1] === "list") return cb(null, "[]", "");
-			return cb(null, "", "");
-		}) as any);
-		try {
-			await hooks.session_start({}, createLifecycleCtx().ctx);
-			expect(calls).toContainEqual(["qmd", "collection", "add", tmpDir, "--name", "pi-memory"]);
-			expect(calls).toContainEqual([
-				"qmd",
-				"context",
-				"add",
-				"/daily",
-				"Daily append-only work logs organized by date",
-				"-c",
-				"pi-memory",
-			]);
-		} finally {
-			_resetExecFileForTest();
-		}
+	test("session_start initializes the search backend when available", async () => {
+		const setup = mock(async () => true);
+		const mockPi = createMockPi();
+		registerExtension(mockPi.pi as any, {
+			searchBackend: createSearchBackendStub({
+				isAvailable: async () => true,
+				setup,
+			}),
+		});
+		await mockPi.hooks.session_start({}, createLifecycleCtx().ctx);
+		expect(setup).toHaveBeenCalledTimes(1);
 	});
 
-	test("session_start skips qmd setup when collection already exists", async () => {
-		const calls: string[][] = [];
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			calls.push([file, ...args]);
-			if (args[0] === "status") return cb(null, "", "");
-			if (args[0] === "collection" && args[1] === "list") return cb(null, '[{"name":"pi-memory"}]', "");
-			return cb(null, "", "");
-		}) as any);
-		try {
-			await hooks.session_start({}, createLifecycleCtx().ctx);
-			expect(calls.some((call) => call[1] === "collection" && call[2] === "add")).toBe(false);
-		} finally {
-			_resetExecFileForTest();
-		}
+	test("session_start skips setup when the backend is unavailable", async () => {
+		const setup = mock(async () => true);
+		const mockPi = createMockPi();
+		registerExtension(mockPi.pi as any, {
+			searchBackend: createSearchBackendStub({
+				isAvailable: async () => false,
+				setup,
+			}),
+		});
+		await mockPi.hooks.session_start({}, createLifecycleCtx().ctx);
+		expect(setup).not.toHaveBeenCalled();
 	});
 
 	test("input marks slash-quit only for non-extension input", async () => {
@@ -1298,12 +1287,14 @@ describe("lifecycle hooks", () => {
 		expect(readFileSafe(dailyPath(todayStr()))).toBeNull();
 	});
 
-	test("session_shutdown clears update timer", async () => {
-		_setQmdAvailable(true);
-		scheduleQmdUpdate();
-		expect(_getUpdateTimer()).not.toBeNull();
-		await hooks.session_shutdown({}, createLifecycleCtx().ctx);
-		expect(_getUpdateTimer()).toBeNull();
+	test("session_shutdown clears scheduled backend updates", async () => {
+		const clearScheduledUpdate = mock(() => {});
+		const mockPi = createMockPi();
+		registerExtension(mockPi.pi as any, {
+			searchBackend: createSearchBackendStub({ clearScheduledUpdate }),
+		});
+		await mockPi.hooks.session_shutdown({}, createLifecycleCtx().ctx);
+		expect(clearScheduledUpdate).toHaveBeenCalledTimes(1);
 	});
 
 	test("session_shutdown unsubscribes previous terminal listener", async () => {
