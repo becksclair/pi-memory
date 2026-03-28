@@ -3,14 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import registerExtension, {
-	_resetBaseDir,
-	_resetExecFileForTest,
-	_setBaseDir,
-	_setExecFileForTest,
-	createQmdSearchBackend,
-	ensureDirs,
-} from "../../index.js";
+import registerExtension, { _resetBaseDir, _setBaseDir, createQmdSearchBackend, ensureDirs } from "../../index.js";
 
 let tmpDir: string;
 
@@ -21,7 +14,6 @@ function setupTmpDir() {
 }
 
 function cleanupTmpDir() {
-	_resetExecFileForTest();
 	_resetBaseDir();
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 }
@@ -121,14 +113,7 @@ describe("qmd sdk backend", () => {
 		expect(createStoreArgs.config.collections.pi_memory.ignore).toContain("graph/**");
 	});
 
-	test("memory_search avoids execFile when sdk backend is active", async () => {
-		let execCalls = 0;
-		_setExecFileForTest(((...args: any[]) => {
-			execCalls += 1;
-			const callback = args[args.length - 1] as (err: Error | null, stdout: string, stderr: string) => void;
-			callback(new Error("execFile should not be called"), "", "");
-		}) as any);
-
+	test("memory_search uses the sdk backend when active", async () => {
 		const mockPi = createMockPi();
 		registerExtension(mockPi.pi as any, {
 			searchBackend: {
@@ -151,17 +136,9 @@ describe("qmd sdk backend", () => {
 		const result = await mockPi.tools.memory_search.execute("call1", { query: "dark mode" }, null, null, {});
 		expect(result.isError).toBeUndefined();
 		expect(result.content[0].text).toContain("### Result 1");
-		expect(execCalls).toBe(0);
 	});
 
-	test("before_agent_start avoids execFile when sdk backend is active", async () => {
-		let execCalls = 0;
-		_setExecFileForTest(((...args: any[]) => {
-			execCalls += 1;
-			const callback = args[args.length - 1] as (err: Error | null, stdout: string, stderr: string) => void;
-			callback(new Error("execFile should not be called"), "", "");
-		}) as any);
-
+	test("before_agent_start uses sdk search results when active", async () => {
 		fs.writeFileSync(path.join(tmpDir, "MEMORY.md"), "Remember dark mode", "utf-8");
 		const mockPi = createMockPi();
 		registerExtension(mockPi.pi as any, {
@@ -185,6 +162,5 @@ describe("qmd sdk backend", () => {
 		)) as { systemPrompt: string };
 		expect(result.systemPrompt).toContain("Relevant memories");
 		expect(result.systemPrompt).toContain("dark mode preference");
-		expect(execCalls).toBe(0);
 	});
 });

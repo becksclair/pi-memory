@@ -12,32 +12,22 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
-	_clearUpdateTimer,
-	_getUpdateTimer,
 	_resetBaseDir,
-	_resetExecFileForTest,
 	_setBaseDir,
-	_setExecFileForTest,
-	_setQmdAvailable,
 	buildExitSummaryFallback,
 	buildMemoryContext,
 	buildPreview,
 	dailyPath,
 	ensureDirs,
-	ensureQmdAvailableForUpdate,
 	formatContextSection,
 	formatExitSummaryEntry,
 	formatPreviewBlock,
 	generateExitSummary,
-	getQmdUpdateMode,
 	nowTimestamp,
 	parseScratchpad,
-	qmdCollectionInstructions,
 	qmdInstallInstructions,
 	readFileSafe,
-	runQmdUpdateNow,
 	type ScratchpadItem,
-	scheduleQmdUpdate,
 	serializeScratchpad,
 	shortSessionId,
 	todayStr,
@@ -58,8 +48,6 @@ function setupTmpDir() {
 
 function cleanupTmpDir() {
 	_resetBaseDir();
-	_setQmdAvailable(false);
-	_clearUpdateTimer();
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 
@@ -550,109 +538,6 @@ describe("qmdInstallInstructions", () => {
 	});
 });
 
-describe("qmdCollectionInstructions", () => {
-	test("mentions collection not configured", () => {
-		expect(qmdCollectionInstructions()).toContain("pi-memory");
-	});
-
-	test("includes setup commands", () => {
-		const instructions = qmdCollectionInstructions();
-		expect(instructions).toContain("qmd collection add");
-		expect(instructions).toContain("qmd embed");
-	});
-});
-
-describe("scheduleQmdUpdate", () => {
-	const originalMode = process.env.PI_MEMORY_QMD_UPDATE;
-
-	beforeEach(() => {
-		delete process.env.PI_MEMORY_QMD_UPDATE;
-		_clearUpdateTimer();
-	});
-	afterEach(() => {
-		if (originalMode === undefined) delete process.env.PI_MEMORY_QMD_UPDATE;
-		else process.env.PI_MEMORY_QMD_UPDATE = originalMode;
-		_clearUpdateTimer();
-		_setQmdAvailable(false);
-	});
-
-	test("does nothing when qmd is not available", () => {
-		_setQmdAvailable(false);
-		scheduleQmdUpdate();
-		expect(_getUpdateTimer()).toBeNull();
-	});
-
-	test("sets a timer when qmd is available", () => {
-		_setQmdAvailable(true);
-		scheduleQmdUpdate();
-		expect(_getUpdateTimer()).not.toBeNull();
-		_clearUpdateTimer();
-	});
-
-	test("debounces multiple calls", () => {
-		_setQmdAvailable(true);
-		scheduleQmdUpdate();
-		const firstTimer = _getUpdateTimer();
-		scheduleQmdUpdate();
-		const secondTimer = _getUpdateTimer();
-		expect(secondTimer).not.toBeNull();
-		expect(firstTimer).not.toBe(secondTimer);
-		_clearUpdateTimer();
-	});
-
-	test("respects manual mode", () => {
-		process.env.PI_MEMORY_QMD_UPDATE = "manual";
-		_setQmdAvailable(true);
-		expect(getQmdUpdateMode()).toBe("manual");
-		scheduleQmdUpdate();
-		expect(_getUpdateTimer()).toBeNull();
-	});
-
-	test("falls back to background for invalid mode", () => {
-		process.env.PI_MEMORY_QMD_UPDATE = "nonsense";
-		expect(getQmdUpdateMode()).toBe("background");
-	});
-});
-
-describe("qmd immediate update helpers", () => {
-	afterEach(() => {
-		_resetExecFileForTest();
-		_setQmdAvailable(false);
-	});
-
-	test("runQmdUpdateNow executes update even in manual mode when qmd is available", async () => {
-		const originalMode = process.env.PI_MEMORY_QMD_UPDATE;
-		process.env.PI_MEMORY_QMD_UPDATE = "manual";
-		_setQmdAvailable(true);
-		const calls: string[][] = [];
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			calls.push([file, ...args]);
-			cb(null, "", "");
-		}) as any);
-
-		await runQmdUpdateNow();
-		expect(calls).toEqual([["qmd", "update"]]);
-
-		if (originalMode === undefined) delete process.env.PI_MEMORY_QMD_UPDATE;
-		else process.env.PI_MEMORY_QMD_UPDATE = originalMode;
-	});
-
-	test("ensureQmdAvailableForUpdate detects qmd regardless of update mode", async () => {
-		const originalMode = process.env.PI_MEMORY_QMD_UPDATE;
-		process.env.PI_MEMORY_QMD_UPDATE = "off";
-		_setQmdAvailable(false);
-		_setExecFileForTest(((file: string, _args: string[], _opts: any, cb: any) => {
-			if (file !== "qmd") return cb(new Error("unexpected"), "", "");
-			cb(null, "", "");
-		}) as any);
-
-		await expect(ensureQmdAvailableForUpdate()).resolves.toBe(true);
-
-		if (originalMode === undefined) delete process.env.PI_MEMORY_QMD_UPDATE;
-		else process.env.PI_MEMORY_QMD_UPDATE = originalMode;
-	});
-});
-
 // ==========================================================================
 // 5. Tool: memory_write
 // ==========================================================================
@@ -663,7 +548,6 @@ describe("memory_write tool", () => {
 	beforeEach(() => {
 		setupTmpDir();
 		ensureDirs();
-		_setQmdAvailable(false);
 		const mockPi = createMockPi();
 		tools = mockPi.tools;
 		registerExtension(mockPi.pi as any);
@@ -820,7 +704,6 @@ describe("scratchpad tool", () => {
 	beforeEach(() => {
 		setupTmpDir();
 		ensureDirs();
-		_setQmdAvailable(false);
 		const mockPi = createMockPi();
 		tools = mockPi.tools;
 		registerExtension(mockPi.pi as any);
@@ -989,7 +872,6 @@ describe("memory_read tool", () => {
 	beforeEach(() => {
 		setupTmpDir();
 		ensureDirs();
-		_setQmdAvailable(false);
 		const mockPi = createMockPi();
 		tools = mockPi.tools;
 		registerExtension(mockPi.pi as any);
@@ -1153,7 +1035,6 @@ describe("lifecycle hooks", () => {
 	beforeEach(() => {
 		setupTmpDir();
 		ensureDirs();
-		_setQmdAvailable(false);
 		const mockPi = createMockPi();
 		hooks = mockPi.hooks;
 		registerExtension(mockPi.pi as any);
@@ -1252,25 +1133,17 @@ describe("lifecycle hooks", () => {
 	});
 
 	test("session_start terminal handler marks ctrl+d only when idle and editor is empty", async () => {
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			if (file === "qmd" && args[0] === "status") return cb(new Error("missing"), "", "");
-			cb(new Error("unexpected"), "", "");
-		}) as any);
 		const ctxBundle = createLifecycleCtx({
 			branch: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } }],
 		});
-		try {
-			await hooks.session_start({}, ctxBundle.ctx);
-			const handler = ctxBundle.getTerminalHandler();
-			expect(handler).toBeTypeOf("function");
-			handler?.("hello");
-			handler?.("\u0004");
-			await hooks.session_shutdown({}, ctxBundle.ctx);
-			const content = readFileSafe(dailyPath(todayStr())) ?? "";
-			expect(content).toContain("exit: ctrl+d");
-		} finally {
-			_resetExecFileForTest();
-		}
+		await hooks.session_start({}, ctxBundle.ctx);
+		const handler = ctxBundle.getTerminalHandler();
+		expect(handler).toBeTypeOf("function");
+		handler?.("hello");
+		handler?.("\u0004");
+		await hooks.session_shutdown({}, ctxBundle.ctx);
+		const content = readFileSafe(dailyPath(todayStr())) ?? "";
+		expect(content).toContain("exit: ctrl+d");
 	});
 
 	test("session_shutdown writes fallback summary when generation cannot use a model", async () => {
@@ -1302,21 +1175,13 @@ describe("lifecycle hooks", () => {
 	});
 
 	test("session_shutdown unsubscribes previous terminal listener", async () => {
-		_setExecFileForTest(((file: string, args: string[], _opts: any, cb: any) => {
-			if (file === "qmd" && args[0] === "status") return cb(new Error("missing"), "", "");
-			cb(new Error("unexpected"), "", "");
-		}) as any);
 		const first = createLifecycleCtx();
 		const second = createLifecycleCtx();
-		try {
-			await hooks.session_start({}, first.ctx);
-			await hooks.session_start({}, second.ctx);
-			expect(first.unsubscribe).toHaveBeenCalledTimes(1);
-			await hooks.session_shutdown({}, second.ctx);
-			expect(second.unsubscribe).toHaveBeenCalledTimes(1);
-		} finally {
-			_resetExecFileForTest();
-		}
+		await hooks.session_start({}, first.ctx);
+		await hooks.session_start({}, second.ctx);
+		expect(first.unsubscribe).toHaveBeenCalledTimes(1);
+		await hooks.session_shutdown({}, second.ctx);
+		expect(second.unsubscribe).toHaveBeenCalledTimes(1);
 	});
 
 	// -- session_before_compact --

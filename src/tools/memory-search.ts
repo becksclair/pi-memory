@@ -1,7 +1,7 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { qmdInstallInstructions } from "../qmd/legacy-cli.js";
+import { qmdInstallInstructions } from "../qmd/messages.js";
 import type { QmdSearchResult, SearchBackend } from "../qmd/search-backend.js";
 
 type RegisteredTool = Parameters<ExtensionAPI["registerTool"]>[0];

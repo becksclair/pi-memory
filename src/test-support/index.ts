@@ -12,25 +12,7 @@ export {
 } from "../config/paths.js";
 export { buildMemoryContext } from "../memory/context.js";
 export { parseScratchpad, type ScratchpadItem, serializeScratchpad } from "../memory/scratchpad.js";
-export {
-	_clearUpdateTimer,
-	_getQmdAvailable,
-	_getUpdateTimer,
-	_resetExecFileForTest,
-	_setExecFileForTest,
-	_setQmdAvailable,
-	checkCollection,
-	detectQmd,
-	ensureQmdAvailableForUpdate,
-	getQmdUpdateMode,
-	qmdCollectionInstructions,
-	qmdInstallInstructions,
-	runQmdSearch,
-	runQmdUpdateNow,
-	scheduleQmdUpdate,
-	searchRelevantMemories,
-	setupQmdCollection,
-} from "../qmd/legacy-cli.js";
+export { qmdInstallInstructions } from "../qmd/messages.js";
 export { createQmdSearchBackend, type QmdSearchResult, type SearchBackend } from "../qmd/search-backend.js";
 export {
 	buildPreview,

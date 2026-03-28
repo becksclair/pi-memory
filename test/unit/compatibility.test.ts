@@ -5,9 +5,7 @@ import * as path from "node:path";
 
 import registerExtension, {
 	_resetBaseDir,
-	_resetExecFileForTest,
 	_setBaseDir,
-	_setQmdAvailable,
 	buildMemoryContext,
 	ensureDirs,
 	todayStr,
@@ -23,9 +21,7 @@ function setupTmpDir() {
 }
 
 function cleanupTmpDir() {
-	_resetExecFileForTest();
 	_resetBaseDir();
-	_setQmdAvailable(false);
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 

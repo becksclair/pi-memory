@@ -454,7 +454,7 @@ Finally, polish retrieval, observability, docs, and CI. Replace the old memory i
     src/shared/preview.ts
     src/memory/scratchpad.ts
     src/memory/context.ts
-    src/qmd/legacy-cli.ts
+    src/qmd/messages.ts
     src/summarization/exit-summary.ts
     src/tools/memory-write.ts
     src/tools/memory-read.ts

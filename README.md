@@ -6,6 +6,8 @@ Thanks to https://github.com/skyfallsin/pi-mem for inspiration.
 
 Persistent memory across coding sessions — long-term facts, daily logs, and a scratchpad checklist. Core memory works as plain markdown files. Optional qmd-powered search adds keyword, semantic, and hybrid retrieval across all memory files, plus automatic selective injection of relevant past memories into every turn.
 
+As of `0.4.0`, the old qmd CLI compatibility helpers are removed. Search is SDK-backed or not available; there is no fallback legacy CLI path.
+
 ## Installation
 
 ```bash
@@ -193,6 +195,12 @@ pi install npm:pi-memory
 ```
 
 ## Changelog
+
+### 0.4.0
+
+- Clean break: removed the old qmd CLI compatibility module and its test-only helper surface.
+- `memory_search` and automatic retrieval now rely exclusively on the qmd SDK backend.
+- Direct imports of legacy qmd helper functions are no longer supported.
 
 ### 0.2.0
 

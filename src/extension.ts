@@ -11,7 +11,7 @@ import {
 } from "./config/paths.js";
 import { buildMemoryContext } from "./memory/context.js";
 import { parseScratchpad } from "./memory/scratchpad.js";
-import { qmdInstallInstructions } from "./qmd/legacy-cli.js";
+import { qmdInstallInstructions } from "./qmd/messages.js";
 import { createQmdSearchBackend, type SearchBackend } from "./qmd/search-backend.js";
 import {
 	buildExitSummaryFallback,
