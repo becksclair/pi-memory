@@ -4,13 +4,13 @@ import type { WriteSessionCheckpointResult } from "../session/checkpoint.js";
 import type { GraphExpansion, GraphStats, GraphStore } from "./store.js";
 
 function isGraphSupportedRuntime() {
-	return !process.versions.bun;
+	// Graph is now supported on both Node and Bun via runtime-agnostic db wrapper
+	return true;
 }
 
 async function withGraphStore<T>(fn: (store: GraphStore) => Promise<T>): Promise<T | null> {
-	if (!isGraphSupportedRuntime()) {
-		return null;
-	}
+	// Graph store now works on both Node (better-sqlite3) and Bun (bun:sqlite)
+	// via the runtime-agnostic database wrapper
 	try {
 		const { createSqliteGraphStore } = await import("./sqlite-store.js");
 		const store = createSqliteGraphStore();

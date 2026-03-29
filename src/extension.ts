@@ -303,12 +303,9 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 	});
 
 	// Create lazy graph store provider for dream integration
+	// Now works on both Node (better-sqlite3) and Bun (bun:sqlite) via runtime-agnostic wrapper
 	const graphProvider = {
 		async getStore(): Promise<GraphStore | null> {
-			// Only supported in Node runtime (better-sqlite3 requires native bindings)
-			if (process.versions.bun) {
-				return null;
-			}
 			try {
 				const store = createSqliteGraphStore();
 				await store.open();

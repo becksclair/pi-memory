@@ -1,15 +1,13 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import DatabaseConstructor from "better-sqlite3";
 
 import { getGraphDbFile, getSessionSummaryFile } from "../config/paths.js";
 import type { SessionCheckpointMeta } from "../session/checkpoint.js";
 import type { CandidateMemory } from "../session/extract.js";
+import { createDatabase, type DatabaseWrapper } from "./db-wrapper.js";
 import { deriveClaimCanonicalKey, graphEntityCandidatesForClaim, normalizeGraphName } from "./expand.js";
 import type { GraphClaim, GraphExpansion, GraphStats, GraphStore } from "./store.js";
-
-type SqliteDatabase = InstanceType<typeof DatabaseConstructor>;
 
 type ClaimStatus = GraphClaim["status"];
 
@@ -203,7 +201,7 @@ function listCheckpointFiles(sessionsDir: string): string[] {
 }
 
 export class SqliteGraphStore implements GraphStore {
-	private db: SqliteDatabase | null = null;
+	private db: DatabaseWrapper | null = null;
 
 	constructor(private readonly dbPath = getGraphDbFile()) {}
 
@@ -212,8 +210,7 @@ export class SqliteGraphStore implements GraphStore {
 			return;
 		}
 		fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
-		this.db = new DatabaseConstructor(this.dbPath);
-		this.db.pragma("journal_mode = WAL");
+		this.db = await createDatabase(this.dbPath);
 	}
 
 	async close() {
@@ -388,7 +385,7 @@ export class SqliteGraphStore implements GraphStore {
 				 ORDER BY updated_at DESC
 				 LIMIT ?`,
 			)
-			.all(...normalizedKeys, limit) as GraphClaim[];
+			.all(...normalizedKeys, limit) as unknown as GraphClaim[];
 
 		let aboutClaimRows: GraphClaim[] = [];
 		if (entityIds.length > 0) {
@@ -411,7 +408,7 @@ export class SqliteGraphStore implements GraphStore {
 					 ORDER BY c.updated_at DESC
 					 LIMIT ?`,
 				)
-				.all(...entityIds, limit) as GraphClaim[];
+				.all(...entityIds, limit) as unknown as GraphClaim[];
 		}
 
 		const claimRows = unique([...directClaimRows, ...aboutClaimRows].map((claim) => claim.claimId)).map(

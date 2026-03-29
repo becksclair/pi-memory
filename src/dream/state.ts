@@ -38,6 +38,7 @@ export interface DreamStatus {
 	pendingItems: number;
 	locked: boolean;
 	lockStartedAt: string | null;
+	lockStale: boolean; // True if a stale lock file exists (not blocking but needs cleanup)
 	hoursSinceLastRun: number | null;
 	canRun: boolean;
 	gateReasons: string[];
@@ -170,7 +171,13 @@ export function acquireDreamLock() {
 	if (fs.existsSync(lockPath)) {
 		const existingLock = readDreamLock();
 		if (!existingLock || isStaleDreamLock(existingLock)) {
-			releaseDreamLock();
+			// Force-release stale locks regardless of PID
+			try {
+				fs.unlinkSync(lockPath);
+			} catch {
+				// Best effort - if unlink fails, try normal release which checks PID
+				releaseDreamLock();
+			}
 		} else {
 			return false;
 		}
@@ -194,11 +201,22 @@ export function acquireDreamLock() {
 	}
 }
 
-export function releaseDreamLock() {
+export function releaseDreamLock(): boolean {
 	try {
-		fs.unlinkSync(getDreamLockFile());
+		const lockPath = getDreamLockFile();
+		// Only release if we own the lock (PID matches)
+		const existingLock = readDreamLock();
+		if (existingLock && existingLock.pid !== process.pid) {
+			console.warn(
+				`[pi-memory] Cannot release dream lock: owned by PID ${existingLock.pid}, current PID ${process.pid}`,
+			);
+			return false;
+		}
+		fs.unlinkSync(lockPath);
+		return true;
 	} catch {
 		// lock may already be absent; release is best-effort
+		return false;
 	}
 }
 
@@ -378,6 +396,9 @@ export function buildDreamStatus(): DreamStatus {
 	const promotedClaimsSinceLastRun = state?.promotedClaimsSinceLastRun ?? 0;
 	const autoTrigger = checkAutoDreamTrigger();
 
+	// Report lock status accurately: only report active (non-stale) locks
+	const activeLock = lock && !isLockStale ? lock : null;
+
 	return {
 		lastRunAt,
 		topicCount: topicFiles.length,
@@ -385,8 +406,9 @@ export function buildDreamStatus(): DreamStatus {
 		supersededCount,
 		summaryMissing,
 		pendingItems,
-		locked: Boolean(lock),
-		lockStartedAt: lock?.startedAt ?? null,
+		locked: Boolean(activeLock),
+		lockStartedAt: activeLock?.startedAt ?? null,
+		lockStale: Boolean(lock) && isLockStale, // Indicate if a stale lock exists
 		hoursSinceLastRun,
 		canRun: gateReasons.length === 0,
 		gateReasons,
