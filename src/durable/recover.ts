@@ -23,6 +23,8 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 		topicCount: rebuild.topicCount,
 		skillCount: rebuild.skillCount,
 		summarySize: summaryContent.length,
+		checkpointsSinceLastRun: 0,
+		promotedClaimsSinceLastRun: 0,
 	});
 
 	const searchAvailable = await searchBackend.ensureReadyForUpdate();

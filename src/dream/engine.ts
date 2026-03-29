@@ -10,7 +10,7 @@ import {
 } from "../config/paths.js";
 import { renderDurableMemorySummary } from "../durable/rebuild.js";
 import type { GraphStore } from "../graph/store.js";
-import { buildNextDreamState } from "./state.js";
+import { acquireCounterLock, buildNextDreamState, readDreamState, releaseCounterLock } from "./state.js";
 
 export interface DreamEngineResult {
 	applied: boolean;
@@ -144,6 +144,12 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 	const artifacts: DreamArtifactResult[] = [];
 	let rolledBack = false;
 
+	// Snapshot counter values at start to compute delta later
+	// This lets us distinguish pre-dream activity from concurrent increments during the dream
+	const snapshotState = readDreamState();
+	const snapshotCheckpoints = snapshotState?.checkpointsSinceLastRun ?? 0;
+	const snapshotPromotedClaims = snapshotState?.promotedClaimsSinceLastRun ?? 0;
+
 	try {
 		// Stage the summary rebuild
 		const summary = renderDurableMemorySummary();
@@ -157,11 +163,13 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			stagedPath: summaryStagedPath,
 		});
 
-		// Stage the dream state
+		// Stage the dream state (counters are reset to 0 after successful dream run)
 		const nextState = buildNextDreamState({
 			topicCount: summary.topicCount,
 			skillCount: summary.skillCount,
 			summaryContent: summary.summaryContent,
+			checkpointsSinceLastRun: 0,
+			promotedClaimsSinceLastRun: 0,
 		});
 		const stateStagedPath = path.join(tempDir, "state.json");
 		fs.writeFileSync(stateStagedPath, `${JSON.stringify(nextState, null, 2)}\n`, "utf-8");
@@ -220,16 +228,55 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			}
 		}
 
-		// Commit phase: atomic rename of all staged files
-		// State file must be LAST — if earlier renames fail, the gate logic self-heals
-		const stateFilePath = getDreamStateFile();
-		const nonStateArtifacts = artifacts.filter((a) => a.path !== stateFilePath);
-		const stateArtifacts = artifacts.filter((a) => a.path === stateFilePath);
-		const orderedArtifacts = [...nonStateArtifacts, ...stateArtifacts];
+		// Counter lock acquisition BEFORE commit: capture any concurrent increments
+		// so they aren't lost when we commit the staged state with zeroed counters
+		let deltaCheckpoints = 0;
+		let deltaPromotedClaims = 0;
+		const counterLockAcquired = acquireCounterLock();
+		try {
+			if (counterLockAcquired) {
+				try {
+					const liveState = readDreamState();
+					const liveCheckpoints = liveState?.checkpointsSinceLastRun ?? 0;
+					const livePromotedClaims = liveState?.promotedClaimsSinceLastRun ?? 0;
+					// Compute delta: only carry forward increments that happened DURING the dream run
+					// (not all pre-dream activity which was already accounted for in triggering this run)
+					deltaCheckpoints = Math.max(0, liveCheckpoints - snapshotCheckpoints);
+					deltaPromotedClaims = Math.max(0, livePromotedClaims - snapshotPromotedClaims);
+				} catch {
+					// Best effort - if we can't read state, proceed with zeroed counters
+					deltaCheckpoints = 0;
+					deltaPromotedClaims = 0;
+				}
+			}
 
-		for (const artifact of orderedArtifacts) {
-			if (artifact.action !== "unchanged") {
-				atomicRename(artifact.stagedPath, artifact.path);
+			// Re-stage the state file with delta counters if we have any concurrent increments
+			if (counterLockAcquired && (deltaCheckpoints > 0 || deltaPromotedClaims > 0)) {
+				const mergedState = {
+					...nextState,
+					checkpointsSinceLastRun: deltaCheckpoints,
+					promotedClaimsSinceLastRun: deltaPromotedClaims,
+				};
+				const stateStagedPath = path.join(tempDir, "state.json");
+				fs.writeFileSync(stateStagedPath, `${JSON.stringify(mergedState, null, 2)}\n`, "utf-8");
+			}
+
+			// Commit phase: atomic rename of all staged files
+			// State file must be LAST — if earlier renames fail, the gate logic self-heals
+			const stateFilePath = getDreamStateFile();
+			const nonStateArtifacts = artifacts.filter((a) => a.path !== stateFilePath);
+			const stateArtifacts = artifacts.filter((a) => a.path === stateFilePath);
+			const orderedArtifacts = [...nonStateArtifacts, ...stateArtifacts];
+
+			for (const artifact of orderedArtifacts) {
+				if (artifact.action !== "unchanged") {
+					atomicRename(artifact.stagedPath, artifact.path);
+				}
+			}
+		} finally {
+			// Always release counter lock, even if an error occurred
+			if (counterLockAcquired) {
+				releaseCounterLock();
 			}
 		}
 

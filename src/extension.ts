@@ -10,6 +10,7 @@ import {
 	todayStr,
 } from "./config/paths.js";
 import { buildMemoryBundle } from "./context/build-memory-bundle.js";
+import { incrementCheckpointCounter } from "./dream/state.js";
 import { buildGraphMemorySection, updateGraphFromCheckpoint } from "./graph/runtime.js";
 import { createSqliteGraphStore } from "./graph/sqlite-store.js";
 import type { GraphStore } from "./graph/store.js";
@@ -119,6 +120,8 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 						...stats,
 					});
 					await updateGraphFromCheckpoint(checkpointResult);
+					// Increment checkpoint counter for auto-trigger tracking
+					incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);
 					await runtime.searchBackend.ensureReadyForUpdate();
 					await runtime.searchBackend.runUpdateNow();
 				}
@@ -223,6 +226,8 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			...stats,
 		});
 		await updateGraphFromCheckpoint(checkpointResult);
+		// Increment checkpoint counter for auto-trigger tracking
+		incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);
 		await runtime.searchBackend.ensureReadyForUpdate();
 		runtime.searchBackend.scheduleUpdate();
 	});

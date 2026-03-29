@@ -1,12 +1,12 @@
 # pi-memory
 
-Memory extension for [pi](https://github.com/mariozechner/pi-mono) with semantic search powered by [qmd](https://github.com/tobi/qmd).
+Three-tier, graph-amplified memory extension for [pi](https://github.com/mariozechner/pi-mono) with semantic search powered by [qmd](https://github.com/tobi/qmd).
+
+- **Tier 1 (Session)**: Recent session checkpoints and rolling summaries
+- **Tier 2 (Durable)**: Topics, skills, and curated long-term memory
+- **Tier 3 (Graph)**: Relational entity-claim graph for associative queries
 
 Thanks to https://github.com/skyfallsin/pi-mem for inspiration.
-
-Persistent memory across coding sessions — long-term facts, daily logs, and a scratchpad checklist. Core memory works as plain markdown files. Optional qmd-powered search adds keyword, semantic, and hybrid retrieval across all memory files, plus automatic selective injection of relevant past memories into every turn.
-
-As of `0.4.0`, the old qmd CLI compatibility helpers are removed. Search is SDK-backed or not available; there is no fallback legacy CLI path.
 
 ## Installation
 
@@ -18,179 +18,228 @@ pi install npm:pi-memory
 pi install ./pi-memory
 ```
 
-`memory_search` and automatic retrieval now use the bundled qmd SDK with a local index under `~/.pi/agent/memory/search/`. You do not need a global qmd collection for the normal path.
-
 Or copy to your extensions directory:
 
 ```bash
 cp -r pi-memory ~/.pi/agent/extensions/pi-memory
 ```
 
-### Optional: qmd CLI for manual maintenance
+Search and automatic retrieval use the bundled qmd SDK with a local index under `~/.pi/agent/memory/search/`. No global qmd collection needed for normal operation.
 
-The extension uses the qmd SDK internally and stores its SQLite index locally under `~/.pi/agent/memory/search/`.
+## Three-Tier Memory System
 
-If you want the standalone qmd CLI for manual inspection or embedding runs, install it separately:
-
-```bash
-npm install -g @tobilu/qmd
-# or
-bun install -g @tobilu/qmd
+```
+Conversation → Checkpoints → Promotion → Topics/Skills → Graph
+                  ↓              ↓            ↓             ↓
+               evidence     candidate    durable      relational
+                slices       memories      files        index
 ```
 
-Note: `memory_search` **semantic**/**deep** modes require vector embeddings. If you see a warning like “need embeddings”, run `qmd embed` once and retry.
+### Tier 1: Session Memory
 
-Without the SDK loading successfully, core tools (write/read/scratchpad) still work normally. Only `memory_search` and selective injection degrade.
+Structured checkpoints written during sessions:
+- On context compaction
+- On session shutdown  
+- Periodic turn-based triggers
+
+Each checkpoint captures extracted facts, preferences, decisions, and procedures with provenance. Recent session summaries are automatically injected into context for continuity.
+
+**Files**: `sessions/<id>/meta.json`, `summary.md`, `checkpoints/`, `evidence/`
+
+### Tier 2: Durable Memory
+
+Promoted knowledge organized by category:
+
+| Category | Contents |
+|----------|----------|
+| `topics/people/` | Family, colleagues, contacts |
+| `topics/places/` | Locations, venues |
+| `topics/projects/` | Active work projects |
+| `topics/household/` | Home, appliances, routines |
+| `topics/preferences/` | User preferences |
+| `topics/procedures/` | Reusable workflows |
+| `topics/general/` | Uncategorized facts |
+| `skills/<slug>/` | Promoted successful procedures |
+
+Promotion happens automatically when facts appear in multiple checkpoints or when explicitly requested. `memory_summary.md` provides an always-loaded concise overview.
+
+### Tier 3: Graph Memory
+
+SQLite-backed relational store derived from durable files:
+- **Entities**: People, places, projects, concepts
+- **Claims**: Statements about entities with confidence and provenance
+- **Edges**: Relations, supersession, contradictions
+
+Enables answering relational questions like "what do we know about the NAS?" without scanning every file.
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `memory_write` | Write to MEMORY.md (long-term) or daily log |
+| `memory_write` | Write to MEMORY.md or daily log |
 | `memory_read` | Read any memory file or list daily logs |
-| `scratchpad` | Add/done/undo/clear/list checklist items |
-| `memory_search` | Search across all memory files (requires qmd) |
-| `memory_status` | Inspect summary, dream, and search health; rebuild the summary |
-| `dream` | Preview or run lightweight durable-memory maintenance |
+| `scratchpad` | Add/done/undo/clear checklist items |
+| `memory_search` | Search across all memory files |
+| `memory_status` | Inspect memory health and rebuild derived state |
+| `dream` | Preview or run memory consolidation |
 
-### memory_search modes
+### memory_search
 
-| Mode | Speed | Method | Best for |
+| Mode | Speed | Method | Best For |
 |------|-------|--------|----------|
 | `keyword` | ~30ms | BM25 | Specific terms, dates, names, #tags, [[links]] |
-| `semantic` | ~2s | Vector search | Related concepts, different wording |
-| `deep` | ~10s | Hybrid + reranking | When other modes miss |
+| `semantic` | ~2s | Vector | Related concepts, different wording |
+| `deep` | ~10s | Hybrid + reranking | Hard-to-find items |
 
 If the first search doesn't find what you need, try rephrasing or switching modes.
 
-## File layout
+### memory_status
+
+Actions:
+- `status`: Show tier summaries, last checkpoint, dream state
+- `rebuild`: Regenerate memory_summary.md and refresh derived state
+
+Modes for status action:
+- `summary`: Sessions, topics, skills counts
+- `dream`: Last run, gate state, pending items
+- `search`: Index path, document counts, update mode
+- `graph`: Entities, claims, superseded count
+- `all`: Everything
+
+### dream
+
+Consolidation pass over derived memory (NOT a transcript rewrite):
+
+| Action | Purpose |
+|--------|---------|
+| `status` | Show dream gate state and pending consolidation signals |
+| `preview` | Show what would change without writing files |
+| `run` | Apply consolidation atomically |
+| `cleanup` | Remove failed temp directories |
+
+Dream safety:
+- Acquires lock file
+- Stages changes in `dream/tmp/` before commit
+- Atomic rename on success
+- Forensic preservation in `dream/tmp.failed-<timestamp>/` on failure
+- Never modifies `sessions/` or `daily/` (immutable history)
+
+Retention scoring weights: usage (40%), recency (30%), confidence (20%), stability (10%). Cold (>60 days) low-scoring claims are archived.
+
+## File Layout
 
 ```
 ~/.pi/agent/memory/
-  MEMORY.md              # Curated long-term memory
-  SCRATCHPAD.md           # Checklist of things to fix/remember
-  daily/
-    2026-02-15.md         # Daily append-only log
-    2026-02-14.md
-    ...
+├── memory_summary.md      # Concise always-loaded summary
+├── MEMORY.md              # Legacy registry and router
+├── SCRATCHPAD.md          # Session scratchpad
+├── daily/                 # Daily log files
+├── sessions/              # Session checkpoints and evidence
+│   └── <session-id>/
+│       ├── meta.json
+│       ├── summary.md
+│       ├── checkpoints/
+│       └── evidence/
+├── topics/                # Durable topics by category
+│   ├── people/
+│   ├── places/
+│   ├── projects/
+│   ├── household/
+│   ├── preferences/
+│   ├── procedures/
+│   └── general/
+├── skills/                # Promoted reusable skills
+├── graph/                 # SQLite graph database
+├── search/                # qmd search index
+├── dream/                 # Dream state and staging
+└── archive/               # Cold storage
 ```
 
-## How it works
+## Context Injection
 
-### Context injection
+Before every agent turn, the following are injected in priority order:
 
-Before every agent turn, the following are injected into the system prompt (in priority order):
-
-1. **Open scratchpad items** (up to 2K chars)
-2. **Today's daily log** (up to 3K chars, tail)
-3. **Relevant memories via qmd search** (up to 2.5K chars) — searches using the user's current prompt to surface related past context
-4. **MEMORY.md** (up to 4K chars, middle-truncated)
-5. **Yesterday's daily log** (up to 3K chars, tail — lowest priority, trimmed first)
-
-Total injection is capped at 16K chars. When qmd is unavailable, step 3 is skipped and the rest works as before.
-
-### Selective injection
-
-When qmd is available, the extension automatically searches memory using the user's prompt before each turn. The top 3 keyword results are injected alongside the standard context. This surfaces relevant past decisions, preferences, and notes — even from daily logs older than yesterday — without the agent needing to explicitly call `memory_search`.
-
-The search has a 3-second timeout and fails silently. If qmd is down or the query returns nothing, injection falls back to the standard behavior.
-
-### Tags and links
-
-Use `#tags` and `[[wiki-links]]` in memory content to improve searchability:
-
-```markdown
-#decision [[database-choice]] Chose PostgreSQL for all backend services.
-#preference [[editor]] User prefers Neovim with LazyVim config.
-#lesson [[api-versioning]] URL prefix versioning (/v1/) avoids CDN cache issues.
+```
+Priority    Section                      Budget
+────────    ───────                      ──────
+1 (high)    Open scratchpad items        2.0K
+2           Current session summary      2.0K
+3           Recent session summaries     2.0K
+4           memory_summary.md            3.0K
+5           qmd search results           2.5K
+6           Graph expansion              1.5K
+7           MEMORY.md excerpt            2.0K
+8 (low)     Yesterday's daily log      2.0K
+                                         ─────
+                                Total: ~16K
 ```
 
-These are content conventions, not enforced metadata. qmd's full-text indexing makes them searchable for free.
+When budget exceeded, lowest priority sections dropped first.
 
-### Session handoff
-
-When the context window compacts, the extension automatically captures a handoff entry in today's daily log:
-
-```markdown
-<!-- HANDOFF 2026-02-15 14:30:00 [a1b2c3d4] -->
-## Session Handoff
-**Open scratchpad items:**
-- [ ] Fix auth bug
-- [ ] Review PR #42
-**Recent daily log context:**
-...last 15 lines of today's log...
-```
-
-This ensures in-progress context survives compaction and is visible in the next turn (via today's daily log injection).
-
-### Other behavior
-
-- **Persistence**: Memory files are plain markdown on disk — readable, editable, and git-friendly.
-- **Tool response previews**: Write/scratchpad tools return size-capped previews instead of full file contents.
-- **qmd SDK backend**: Search uses a managed local qmd SDK store backed by `~/.pi/agent/memory/search/qmd.sqlite`.
-- **qmd re-indexing**: After every write, a debounced local index update runs in the background unless disabled via `PI_MEMORY_QMD_UPDATE`.
-- **qmd embeddings**: Semantic/deep search needs vector embeddings. If you see “need embeddings” warnings, run `qmd embed` once and retry.
-- **Graceful degradation**: If the qmd SDK cannot load, core tools still work. `memory_search` returns setup guidance.
-
-### Manual recovery
-
-If the derived artifacts get out of sync, run:
-
-```bash
-npm run rebuild:derived
-```
-
-That rebuilds `memory_summary.md`, refreshes dream state, and runs an immediate local qmd index update when the SDK backend is available.
-
-### Configuration
+## Configuration
 
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
-| `PI_MEMORY_QMD_UPDATE` | `background`, `manual`, `off` | `background` | Controls automatic `qmd update` after writes |
-| `PI_MEMORY_NO_SEARCH` | `1` | unset | Disable selective injection (for A/B testing) |
+| `PI_MEMORY_QMD_UPDATE` | `background`, `manual`, `off` | `background` | Auto-update qmd index after writes |
+| `PI_MEMORY_NO_SEARCH` | `1` | unset | Disable selective injection |
 
-## Running tests
+## Recovery
+
+Derived state (graph, qmd index, memory_summary.md) is disposable. If corrupted:
 
 ```bash
-# Unit tests (no LLM, no qmd — fast, deterministic)
-bun test/unit.ts
+# Rebuild everything from source files
+npm run rebuild:derived
 
-# End-to-end tests (requires pi + API key, optionally qmd)
-bun test/e2e.ts
-
-# Recall effectiveness eval (requires pi + API key + qmd)
-bun test/eval-recall.ts
-
-# Pin provider/model for cheaper eval runs
-PI_E2E_PROVIDER=openai PI_E2E_MODEL=gpt-4o-mini bun test/eval-recall.ts
-
-# Multiple runs for statistical robustness
-EVAL_RUNS=3 bun test/eval-recall.ts
+# Or directly
+npx tsx scripts/rebuild-derived-memory.ts
 ```
+
+This recreates:
+- Graph database from checkpoint JSON and topic/skill files
+- qmd index from current markdown files
+- memory_summary.md from active topics and skills
+
+## Running Tests
+
+```bash
+# All deterministic tests (no LLM, no API key required)
+npm test
+
+# Individual suites
+npm run test:unit           # Unit tests
+npm run test:graph          # Graph store tests
+
+# End-to-end (requires pi + API key)
+npm run test:e2e
+
+# Eval (requires pi + API key + qmd)
+npm run test:eval
+```
+
+| Suite | Requirements | What It Tests |
+|-------|-------------|---------------|
+| Unit | None | Context, layout, qmd SDK, recovery, retrieval |
+| Graph | None | SQLite store, runtime integration |
+| E2E | pi + API key | Tool registration, recall, lifecycle |
+| Eval | pi + API key + qmd | Recall accuracy |
 
 All tests back up and restore existing memory files.
 
-### Test levels
-
-| Level | File | Requirements | What it tests |
-|-------|------|-------------|---------------|
-| Unit | `test/unit.ts` | None | Context builder, truncation, handoff, scratchpad parsing |
-| E2E | `test/e2e.ts` | pi + API key | Tool registration, write/recall, scratchpad lifecycle, search |
-| Eval | `test/eval-recall.ts` | pi + API key + qmd | Recall accuracy with vs without selective injection |
-
 ## Development
-
-The public entrypoint is `index.ts`, which forwards to the modular implementation under `src/`. Pi still loads TypeScript directly; the build step is for typechecking.
 
 ```bash
 # Test with pi directly
 pi -p -e ./index.ts "remember: I prefer dark mode"
 
 # Verify memory was written
-cat ~/.pi/agent/memory/MEMORY.md
+cat ~/.pi/agent/memory/topics/preferences/editor.md
 
-# Rebuild derived artifacts after manual edits or weird state
-npm run rebuild:derived
+# Check status
+pi -p -e ./index.ts "use the memory_status tool"
+
+# Run dream consolidation
+pi -p -e ./index.ts "use the dream tool to preview consolidation"
 ```
 
 ## Publishing (maintainers)
@@ -211,27 +260,22 @@ pi install npm:pi-memory
 
 ## Changelog
 
-### 0.4.0
+### 0.4.x - Three-Tier Graph-Amplified Memory
+- Session checkpointing with evidence preservation
+- Durable topics and skills with provenance
+- SQLite-backed graph store with supersession tracking
+- Atomic dream engine with retention scoring
+- `memory_status` and `dream` tools
+- Recovery script for derived state
 
-- Clean break: removed the old qmd CLI compatibility module and its test-only helper surface.
-- `memory_search` and automatic retrieval now rely exclusively on the qmd SDK backend.
-- Direct imports of legacy qmd helper functions are no longer supported.
+### 0.4.0 - qmd SDK Migration
+- Removed CLI shell-outs, SDK-backed search only
+- Local qmd index under `search/`
+- Selective injection
 
-### 0.2.0
+### 0.2.0 - Selective Injection
+- Prompt-based memory retrieval
+- Session handoff on compaction
 
-- **Selective injection**: Before each turn, the user's prompt is searched against memory via qmd. Top results are injected into the system prompt alongside standard context, surfacing relevant past decisions without explicit tool calls.
-- **qmd auto-setup**: The extension automatically creates the `pi-memory` collection and path contexts on session start when qmd is available. No manual `qmd collection add` needed.
-- **Tags and links**: `memory_write` and context injection now encourage `#tags` and `[[wiki-links]]` as searchable content conventions.
-- **Session handoff on compaction**: `session_before_compact` automatically writes a handoff entry to today's daily log with open scratchpad items and recent context, preserving in-progress state across context compaction.
-- **Improved memory_search description**: Encourages iterative search (rephrasing, mode-switching) and mentions tags/links in keyword mode.
-- **Context priority reordering**: Injection order is now scratchpad > today > search results > MEMORY.md > yesterday (previously MEMORY.md was first). MEMORY.md budget reduced from 6K to 4K to make room for search results (2.5K).
-- **`PI_MEMORY_NO_SEARCH` env var**: Disable selective injection for A/B testing.
-- **Unit tests**: Added `test/unit.ts` with 18 deterministic tests (no LLM/qmd needed).
-- **Recall eval**: Added `test/eval-recall.ts` for measuring recall effectiveness with/without selective injection.
-
-### 0.1.0
-
-- Initial release: `memory_write`, `memory_read`, `scratchpad`, `memory_search` tools.
-- Context injection of MEMORY.md, scratchpad, and today/yesterday daily logs.
-- qmd integration for keyword, semantic, and hybrid search.
-- Debounced background `qmd update` after writes.
+### 0.1.0 - Initial Release
+- Basic tools and context injection

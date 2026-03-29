@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+	getDreamDir,
 	getDreamLockFile,
 	getDreamStateFile,
 	getDreamTempDir,
@@ -18,6 +19,10 @@ export interface DreamState {
 	topicCount: number;
 	skillCount: number;
 	summarySize: number;
+	/** Number of checkpoints written since last dream run */
+	checkpointsSinceLastRun: number;
+	/** Number of claims promoted since last dream run */
+	promotedClaimsSinceLastRun: number;
 }
 
 export interface DreamLock {
@@ -41,6 +46,15 @@ export interface DreamStatus {
 		exists: boolean;
 		stagedFiles: string[];
 		failedDirs: string[];
+	};
+	/** Checkpoints written since last dream run */
+	checkpointsSinceLastRun: number;
+	/** Claims promoted since last dream run */
+	promotedClaimsSinceLastRun: number;
+	/** Auto-trigger status based on activity thresholds */
+	autoTrigger: {
+		shouldTrigger: boolean;
+		reasons: string[];
 	};
 }
 
@@ -138,12 +152,21 @@ export function acquireDreamLock() {
 		}
 	}
 	const lock: DreamLock = { startedAt: new Date().toISOString(), pid: process.pid };
-	const fd = fs.openSync(lockPath, "wx");
 	try {
-		fs.writeFileSync(fd, `${JSON.stringify(lock, null, 2)}\n`, "utf-8");
-		return true;
-	} finally {
-		fs.closeSync(fd);
+		const fd = fs.openSync(lockPath, "wx");
+		try {
+			fs.writeFileSync(fd, `${JSON.stringify(lock, null, 2)}\n`, "utf-8");
+			return true;
+		} finally {
+			fs.closeSync(fd);
+		}
+	} catch (err) {
+		// Only swallow EEXIST (another process created the file)
+		// Re-throw other errors like ENOENT (missing directory), EACCES, EMFILE
+		if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+			return false;
+		}
+		throw err;
 	}
 }
 
@@ -159,12 +182,16 @@ export function buildNextDreamState(summary: {
 	topicCount: number;
 	skillCount: number;
 	summaryContent: string;
+	checkpointsSinceLastRun?: number;
+	promotedClaimsSinceLastRun?: number;
 }): DreamState {
 	return {
 		lastRunAt: new Date().toISOString(),
 		topicCount: summary.topicCount,
 		skillCount: summary.skillCount,
 		summarySize: summary.summaryContent.length,
+		checkpointsSinceLastRun: summary.checkpointsSinceLastRun ?? 0,
+		promotedClaimsSinceLastRun: summary.promotedClaimsSinceLastRun ?? 0,
 	};
 }
 
@@ -274,7 +301,8 @@ export function buildDreamStatus(): DreamStatus {
 	const summaryMissing = !summaryContent.trim();
 	const state = readDreamState();
 	const lock = readDreamLock();
-	const lastRunAt = state?.lastRunAt ?? null;
+	const isNeverRun = state?.lastRunAt === "1970-01-01T00:00:00.000Z";
+	const lastRunAt = isNeverRun ? null : (state?.lastRunAt ?? null);
 	const hoursSinceLastRun = lastRunAt ? (Date.now() - new Date(lastRunAt).getTime()) / 3_600_000 : null;
 	const pendingItems =
 		supersededCount + (summaryMissing ? 1 : 0) + (!state && (topicFiles.length > 0 || skillFiles.length > 0) ? 1 : 0);
@@ -307,6 +335,11 @@ export function buildDreamStatus(): DreamStatus {
 		// Best effort temp status
 	}
 
+	// Get activity counters and auto-trigger status
+	const checkpointsSinceLastRun = state?.checkpointsSinceLastRun ?? 0;
+	const promotedClaimsSinceLastRun = state?.promotedClaimsSinceLastRun ?? 0;
+	const autoTrigger = checkAutoDreamTrigger();
+
 	return {
 		lastRunAt,
 		topicCount: topicFiles.length,
@@ -324,6 +357,12 @@ export function buildDreamStatus(): DreamStatus {
 			stagedFiles,
 			failedDirs,
 		},
+		checkpointsSinceLastRun,
+		promotedClaimsSinceLastRun,
+		autoTrigger: {
+			shouldTrigger: autoTrigger.shouldTrigger,
+			reasons: autoTrigger.reasons,
+		},
 	};
 }
 
@@ -336,8 +375,14 @@ export function formatDreamStatus(status: DreamStatus) {
 		`- Superseded claims: ${status.supersededCount}`,
 		`- Summary missing: ${status.summaryMissing ? "yes" : "no"}`,
 		`- Pending items: ${status.pendingItems}`,
+		`- Checkpoints since last run: ${status.checkpointsSinceLastRun}`,
+		`- Promoted claims since last run: ${status.promotedClaimsSinceLastRun}`,
 		`- Locked: ${status.locked ? `yes (${status.lockStartedAt})` : "no"}`,
 		`- Can run: ${status.canRun ? "yes" : "no"}`,
+		`- Auto-trigger: ${status.autoTrigger.shouldTrigger ? "ready" : "waiting"}`,
+		...(status.autoTrigger.reasons.length > 0
+			? ["- Auto-trigger gates:", ...status.autoTrigger.reasons.map((r) => `  - ${r}`)]
+			: []),
 		...(status.gateReasons.length > 0 ? ["- Gates:", ...status.gateReasons.map((reason) => `  - ${reason}`)] : []),
 	];
 	if (status.tempDir.exists) {
@@ -376,4 +421,148 @@ export function formatDreamPreview(
 		}
 	}
 	return lines.join("\n");
+}
+
+/** Configuration for auto-triggering dreams based on activity thresholds */
+export interface DreamAutoTriggerConfig {
+	/** Minimum hours between automatic dream runs (default: 6) */
+	minHoursBetweenRuns: number;
+	/** Minimum checkpoints since last run to trigger (default: 3) */
+	minCheckpointsSinceLastRun: number;
+	/** Minimum promoted claims since last run to trigger (default: 5) */
+	minPromotedClaimsSinceLastRun: number;
+}
+
+const DEFAULT_AUTO_TRIGGER_CONFIG: DreamAutoTriggerConfig = {
+	minHoursBetweenRuns: 6,
+	minCheckpointsSinceLastRun: 3,
+	minPromotedClaimsSinceLastRun: 5,
+};
+
+const COUNTER_LOCK_STALE_MS = 30_000; // 30 seconds
+
+function getCounterLockFile(): string {
+	return path.join(getDreamDir(), "counter.lock");
+}
+
+export function acquireCounterLock(): boolean {
+	const lockPath = getCounterLockFile();
+	if (fs.existsSync(lockPath)) {
+		try {
+			const existing = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as { startedAt: string };
+			const startedAt = new Date(existing.startedAt).getTime();
+			if (Number.isFinite(startedAt) && Date.now() - startedAt > COUNTER_LOCK_STALE_MS) {
+				fs.unlinkSync(lockPath);
+			} else {
+				return false;
+			}
+		} catch {
+			// Malformed or stale lock - clean up best effort
+			try {
+				fs.unlinkSync(lockPath);
+			} catch {
+				// Lock may have been deleted by another process - treat as contention
+				return false;
+			}
+		}
+	}
+	const lock = { startedAt: new Date().toISOString(), pid: process.pid };
+	try {
+		const fd = fs.openSync(lockPath, "wx");
+		try {
+			fs.writeFileSync(fd, `${JSON.stringify(lock, null, 2)}\n`, "utf-8");
+			return true;
+		} finally {
+			fs.closeSync(fd);
+		}
+	} catch (err) {
+		// Only swallow EEXIST (another process created the file)
+		// Re-throw other errors like ENOENT (missing directory), EACCES, EMFILE
+		if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+			return false;
+		}
+		throw err;
+	}
+}
+
+export function releaseCounterLock(): void {
+	try {
+		fs.unlinkSync(getCounterLockFile());
+	} catch {
+		// Best effort - lock may already be absent
+	}
+}
+
+/** Increment checkpoint counter in dream state (thread-safe with file locking) */
+export function incrementCheckpointCounter(incrementPromotedClaims = 0): void {
+	// Acquire lock to prevent race conditions between concurrent sessions
+	if (!acquireCounterLock()) {
+		// Lock not acquired - another process is updating counters
+		// For simplicity, we skip this increment rather than retry
+		// In practice, this is rare and the counters are approximate
+		return;
+	}
+	try {
+		const state = readDreamState();
+		if (!state) {
+			// No state yet, initialize with counters starting at 1 checkpoint
+			// Note: lastRunAt uses sentinel value so time gate is skipped until first dream
+			writeDreamState({
+				lastRunAt: "1970-01-01T00:00:00.000Z", // Sentinel value meaning "never run"
+				topicCount: 0,
+				skillCount: 0,
+				summarySize: 0,
+				checkpointsSinceLastRun: 1,
+				promotedClaimsSinceLastRun: incrementPromotedClaims,
+			});
+			return;
+		}
+		writeDreamState({
+			...state,
+			checkpointsSinceLastRun: (state.checkpointsSinceLastRun ?? 0) + 1,
+			promotedClaimsSinceLastRun: (state.promotedClaimsSinceLastRun ?? 0) + incrementPromotedClaims,
+		});
+	} finally {
+		releaseCounterLock();
+	}
+}
+
+/** Check if auto-trigger conditions are met for running a dream */
+export function checkAutoDreamTrigger(config?: Partial<DreamAutoTriggerConfig>): {
+	shouldTrigger: boolean;
+	reasons: string[];
+	checkpoints: number;
+	promotedClaims: number;
+	hoursSinceLastRun: number | null;
+} {
+	const cfg = { ...DEFAULT_AUTO_TRIGGER_CONFIG, ...config };
+	const state = readDreamState();
+	const reasons: string[] = [];
+
+	const isNeverRun = state?.lastRunAt === "1970-01-01T00:00:00.000Z";
+	const hoursSinceLastRun =
+		state?.lastRunAt && !isNeverRun ? (Date.now() - new Date(state.lastRunAt).getTime()) / 3_600_000 : null;
+
+	const checkpoints = state?.checkpointsSinceLastRun ?? 0;
+	const promotedClaims = state?.promotedClaimsSinceLastRun ?? 0;
+
+	// Check time gate
+	if (hoursSinceLastRun !== null && hoursSinceLastRun < cfg.minHoursBetweenRuns) {
+		reasons.push(`hours since last run (${hoursSinceLastRun.toFixed(1)}) < ${cfg.minHoursBetweenRuns}`);
+	}
+
+	// Check activity gate (checkpoints OR promoted claims must meet threshold)
+	const hasEnoughCheckpoints = checkpoints >= cfg.minCheckpointsSinceLastRun;
+	const hasEnoughClaims = promotedClaims >= cfg.minPromotedClaimsSinceLastRun;
+	if (!hasEnoughCheckpoints && !hasEnoughClaims) {
+		reasons.push(`activity since last run insufficient (checkpoints: ${checkpoints}, claims: ${promotedClaims})`);
+	}
+
+	return {
+		shouldTrigger: reasons.length === 0,
+		reasons,
+		checkpoints,
+		promotedClaims,
+		hoursSinceLastRun,
+	};
 }

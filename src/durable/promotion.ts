@@ -20,6 +20,8 @@ interface PromotionRecord {
 export interface DurablePromotionResult {
 	promotedTopics: string[];
 	promotedSkills: string[];
+	/** Total number of claims promoted in this operation */
+	promotedCount: number;
 }
 
 interface SessionCheckpointLike {
@@ -329,15 +331,18 @@ function promoteSkill(memory: CandidateMemory, checkpoint: SessionCheckpointLike
 export function promoteCheckpointMemories(checkpoint: SessionCheckpointLike): DurablePromotionResult {
 	const promotedTopics = new Set<string>();
 	const promotedSkills = new Set<string>();
+	let promotedCount = 0;
 
 	for (const memory of checkpoint.candidateMemories) {
 		if (shouldPromoteToTopic(memory)) {
 			promotedTopics.add(promoteTopic(memory, checkpoint));
+			promotedCount++;
 		}
 		if (shouldPromoteToSkill(memory)) {
 			const promotedSkill = promoteSkill(memory, checkpoint);
 			if (promotedSkill) {
 				promotedSkills.add(promotedSkill);
+				promotedCount++;
 			}
 		}
 	}
@@ -345,5 +350,6 @@ export function promoteCheckpointMemories(checkpoint: SessionCheckpointLike): Du
 	return {
 		promotedTopics: [...promotedTopics],
 		promotedSkills: [...promotedSkills],
+		promotedCount,
 	};
 }
