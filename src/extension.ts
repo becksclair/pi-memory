@@ -10,7 +10,7 @@ import {
 	todayStr,
 } from "./config/paths.js";
 import { buildMemoryBundle } from "./context/build-memory-bundle.js";
-import { runDreamWithStaging } from "./dream/engine.js";
+import { cleanupOldFailedTempDirs, runDreamWithStaging } from "./dream/engine.js";
 import {
 	checkAutoDreamTrigger,
 	incrementCheckpointCounter,
@@ -93,6 +93,18 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 	pi.on("session_start", async (_event, ctx) => {
 		runtime.exitSummaryReason = null;
 		ensureDirs();
+
+		// Automatic cleanup of old failed dream temp directories (older than 7 days)
+		// This prevents operational clutter from accumulated failed runs
+		try {
+			const cleanedCount = cleanupOldFailedTempDirs(7);
+			if (cleanedCount > 0) {
+				console.log(`[pi-memory] Cleaned up ${cleanedCount} old failed dream temp directory(ies)`);
+			}
+		} catch {
+			// Best effort - don't fail session start if cleanup fails
+		}
+
 		ensureSessionScaffold({
 			sessionId: ctx.sessionManager.getSessionId(),
 			startedAt: nowTimestamp(),

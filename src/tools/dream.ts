@@ -4,6 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { ensureDirs } from "../config/paths.js";
 import {
 	cleanupFailedTempDirs,
+	cleanupOldFailedTempDirs,
 	getDreamTempStatus,
 	previewDreamStaging,
 	runDreamWithStaging,

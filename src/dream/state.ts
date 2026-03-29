@@ -522,9 +522,12 @@ export function acquireCounterLock(): boolean {
 	const lockPath = getCounterLockFile();
 	if (fs.existsSync(lockPath)) {
 		try {
-			const existing = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as { startedAt: string };
+			const existing = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as { startedAt: string; pid: number };
 			const startedAt = new Date(existing.startedAt).getTime();
-			if (Number.isFinite(startedAt) && Date.now() - startedAt > COUNTER_LOCK_STALE_MS) {
+			const isTimeStale = Number.isFinite(startedAt) && Date.now() - startedAt > COUNTER_LOCK_STALE_MS;
+			// Liveness-aware: also check if owning process is still running
+			const isOwnerDead = !isProcessRunning(existing.pid);
+			if (isTimeStale || isOwnerDead) {
 				fs.unlinkSync(lockPath);
 			} else {
 				return false;

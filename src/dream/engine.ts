@@ -456,4 +456,40 @@ export function cleanupFailedTempDirs(): number {
 	return cleaned;
 }
 
+/**
+ * Clean up old failed temp directories (older than specified days)
+ * Called automatically during session_start to prevent operational clutter
+ */
+export function cleanupOldFailedTempDirs(maxAgeDays: number): number {
+	const dreamDir = getDreamDir();
+	if (!fs.existsSync(dreamDir)) {
+		return 0;
+	}
+
+	const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+	const now = Date.now();
+
+	// Find all failed temp dirs (tmp-<pid>-<timestamp>.failed-<timestamp>)
+	const failedDirs = fs.readdirSync(dreamDir).filter((name) => /^tmp-\d+-\d+\.failed-\d+$/.test(name));
+
+	let cleaned = 0;
+	for (const dir of failedDirs) {
+		try {
+			// Extract timestamp from directory name
+			const match = dir.match(/\.failed-(\d+)$/);
+			if (match) {
+				const failedTimestamp = Number.parseInt(match[1], 10);
+				if (Number.isFinite(failedTimestamp) && now - failedTimestamp > maxAgeMs) {
+					fs.rmSync(path.join(dreamDir, dir), { recursive: true, force: true });
+					cleaned++;
+				}
+			}
+		} catch {
+			// Best effort cleanup
+		}
+	}
+
+	return cleaned;
+}
+
 export { computeRetentionScore, shouldArchive };
