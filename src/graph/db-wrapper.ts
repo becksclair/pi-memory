@@ -32,7 +32,7 @@ class BunDatabaseWrapper implements DatabaseWrapper {
 
 	prepare(sql: string): PreparedStatementWrapper {
 		const stmt = this.db.query(sql);
-		return new BunStatementWrapper(stmt);
+		return new BunStatementWrapper(stmt, this.db);
 	}
 
 	exec(sql: string): void {
@@ -49,13 +49,19 @@ class BunDatabaseWrapper implements DatabaseWrapper {
 }
 
 class BunStatementWrapper implements PreparedStatementWrapper {
-	constructor(private stmt: any) {}
+	constructor(
+		private stmt: any,
+		private db: any,
+	) {}
 
 	run(...params: unknown[]) {
-		// bun:sqlite uses run() for exec, but we need to track changes
-		// For inserts/updates, we run and return approximate changes
+		// bun:sqlite's run() returns void, unlike better-sqlite3 which returns changes/lastInsertRowid
+		// We use db.lastInsertRowId for the last inserted row ID (if available)
+		// Note: changes count is not directly available in bun:sqlite, returning 1 as optimistic default
+		// Current codebase doesn't depend on accurate changes count, but this is a known limitation
 		this.stmt.run(...params);
-		return { changes: 1, lastInsertRowid: 0 };
+		const lastInsertRowid = this.db.lastInsertRowId ?? 0;
+		return { changes: 1, lastInsertRowid };
 	}
 
 	get(...params: unknown[]) {

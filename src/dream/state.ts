@@ -161,9 +161,22 @@ export function readDreamLock(): DreamLock | null {
 	}
 }
 
+function isProcessRunning(pid: number): boolean {
+	try {
+		// process.kill(pid, 0) checks if process exists without sending a signal
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function isStaleDreamLock(lock: DreamLock) {
 	const startedAt = new Date(lock.startedAt).getTime();
-	return Number.isFinite(startedAt) ? Date.now() - startedAt > DREAM_LOCK_STALE_MS : true;
+	const isTimeStale = Number.isFinite(startedAt) ? Date.now() - startedAt > DREAM_LOCK_STALE_MS : true;
+	// Liveness-aware: also check if owning process is still running
+	const isOwnerDead = !isProcessRunning(lock.pid);
+	return isTimeStale || isOwnerDead;
 }
 
 export function acquireDreamLock() {

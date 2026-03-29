@@ -7,7 +7,7 @@
  *
  * Run with: bun test test/unit/bun-lifecycle.test.ts
  */
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,10 +31,18 @@ describe("Bun full lifecycle integration", () => {
 		ensureDirs();
 	});
 
-	// Reset to default memory root after all tests
-	test("_cleanup", () => {
+	afterEach(() => {
+		// Reset to default memory root after each test to ensure isolation
 		_resetBaseDir();
-		expect(true).toBe(true);
+		delete process.env.PI_AGENT_MEMORY_ROOT;
+		// Cleanup temp directory
+		try {
+			if (tempDir) {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		} catch {
+			// Best effort cleanup
+		}
 	});
 
 	test("session scaffolding writes checkpoints to isolated temp directory", async () => {
