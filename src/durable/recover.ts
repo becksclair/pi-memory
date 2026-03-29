@@ -46,6 +46,19 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 		const summaryContent = readFileSafe(rebuild.summaryPath) ?? "";
 
 		// Preserve existing checkpoint counters during recovery - don't zero them
+		// Best effort: read existing counters first (without lock) in case we can't acquire lock
+		let preservedCheckpoints = 0;
+		let preservedPromotedClaims = 0;
+		try {
+			const existingState = readDreamState();
+			preservedCheckpoints = existingState?.checkpointsSinceLastRun ?? 0;
+			preservedPromotedClaims = existingState?.promotedClaimsSinceLastRun ?? 0;
+		} catch {
+			// Best effort - if we can't read state, proceed with zeroed counters
+			preservedCheckpoints = 0;
+			preservedPromotedClaims = 0;
+		}
+
 		// Acquire counter lock to prevent race with concurrent checkpoint increments
 		let counterLockAcquired = false;
 		for (let i = 0; i < 50; i++) {
@@ -54,36 +67,33 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
 
-		let preservedCheckpoints = 0;
-		let preservedPromotedClaims = 0;
 		if (counterLockAcquired) {
 			try {
-				const existingState = readDreamState();
-				preservedCheckpoints = existingState?.checkpointsSinceLastRun ?? 0;
-				preservedPromotedClaims = existingState?.promotedClaimsSinceLastRun ?? 0;
+				// Re-read counters under lock to get most recent values
+				const lockedState = readDreamState();
+				const finalCheckpoints = lockedState?.checkpointsSinceLastRun ?? preservedCheckpoints;
+				const finalPromotedClaims = lockedState?.promotedClaimsSinceLastRun ?? preservedPromotedClaims;
 				writeDreamState({
 					lastRunAt: new Date().toISOString(),
 					topicCount: rebuild.topicCount,
 					skillCount: rebuild.skillCount,
 					summarySize: summaryContent.length,
-					checkpointsSinceLastRun: preservedCheckpoints,
-					promotedClaimsSinceLastRun: preservedPromotedClaims,
+					checkpointsSinceLastRun: finalCheckpoints,
+					promotedClaimsSinceLastRun: finalPromotedClaims,
 				});
 			} finally {
 				releaseCounterLock();
 			}
 		} else {
-			// Could not acquire counter lock - proceed without preserving counters
-			// This is a best-effort fallback; counters may be lost
-			console.warn("[pi-memory] Could not acquire counter lock during recovery, counters may be lost");
-			writeDreamState({
-				lastRunAt: new Date().toISOString(),
-				topicCount: rebuild.topicCount,
-				skillCount: rebuild.skillCount,
-				summarySize: summaryContent.length,
-				checkpointsSinceLastRun: 0,
-				promotedClaimsSinceLastRun: 0,
-			});
+			// Could not acquire counter lock - SKIP writing state file to preserve existing counters
+			// This prevents losing counters by overwriting with potentially stale data
+			console.warn(
+				`[pi-memory] Could not acquire counter lock during recovery, skipping state update to preserve counters ` +
+					`(${preservedCheckpoints} checkpoints, ${preservedPromotedClaims} promoted claims)`,
+			);
+			// Note: We intentionally do NOT write the state file here.
+			// The existing counters remain in the file, which is safer than overwriting with potentially
+			// stale summary counts while missing recent checkpoint activity.
 		}
 
 		// Actually rebuild the SQLite graph from disk - don't just clear the flag

@@ -1,6 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getDreamDir, getDreamStateFile, getSkillsDir, getTopicsDir, readFileSafe } from "../config/paths.js";
+import {
+	getArchiveDir,
+	getDreamDir,
+	getDreamStateFile,
+	getSkillsDir,
+	getTopicsDir,
+	readFileSafe,
+} from "../config/paths.js";
 import { renderDurableMemorySummary } from "../durable/rebuild.js";
 import type { GraphStore } from "../graph/store.js";
 import {
@@ -105,6 +112,41 @@ function shouldArchive(score: RetentionScore): boolean {
 	return score.score < 0.5 && score.factors.recencyDays > COLD_DAYS_THRESHOLD;
 }
 
+/**
+ * Archive a topic file by moving it to the archive directory.
+ * Returns true if successful, false otherwise.
+ */
+function archiveTopicFile(filePath: string): boolean {
+	try {
+		const archiveDir = getArchiveDir();
+		fs.mkdirSync(archiveDir, { recursive: true });
+
+		// Extract category from path (topics/<category>/<file>)
+		const match = filePath.match(/topics[/\\]([^/\\]+)[/\\]([^/\\]+)$/);
+		if (!match) {
+			console.warn(`[pi-memory] Could not extract category from path: ${filePath}`);
+			return false;
+		}
+		const [, category, fileName] = match;
+
+		// Create category subdirectory in archive
+		const archiveCategoryDir = path.join(archiveDir, category);
+		fs.mkdirSync(archiveCategoryDir, { recursive: true });
+
+		// Move file to archive with timestamp prefix to avoid collisions
+		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const archivedName = `${timestamp}-${fileName}`;
+		const archivePath = path.join(archiveCategoryDir, archivedName);
+
+		fs.renameSync(filePath, archivePath);
+		console.log(`[pi-memory] Archived: ${filePath} -> ${archivePath}`);
+		return true;
+	} catch (err) {
+		console.warn(`[pi-memory] Failed to archive ${filePath}:`, err instanceof Error ? err.message : String(err));
+		return false;
+	}
+}
+
 function getTopicFilesToArchive(): string[] {
 	const archiveList: string[] = [];
 	const topicsDir = getTopicsDir();
@@ -202,16 +244,70 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			stagedPath: stateStagedPath,
 		});
 
-		// Compute retention scores for potential archiving (staging only - no action yet)
+		// Compute retention scores and archive low-value memories
 		const archiveCandidates = getTopicFilesToArchive();
-		const _retentionScores: RetentionScore[] = [];
+		const archivedFiles: string[] = [];
 		if (graphStore && archiveCandidates.length > 0) {
-			const _stats = await graphStore.stats();
-			// Use graph stats to inform retention decisions in future iterations
-			// For now, we just track that we considered them
-			for (const _filePath of archiveCandidates) {
-				// Placeholder for retention scoring integration with graph data
-				// In a full implementation, we'd query claim usage data from graph
+			// Query graph for usage data on archive candidates
+			const claimsUsage = await graphStore.getClaimsUsageForSources(archiveCandidates);
+
+			// Aggregate usage data by source file
+			const usageByFile = new Map<string, { totalUsage: number; lastUsedAt: string | null; claimCount: number }>();
+			for (const claim of claimsUsage) {
+				const existing = usageByFile.get(claim.sourcePath);
+				if (existing) {
+					existing.totalUsage += claim.usageCount;
+					existing.claimCount++;
+					if (claim.lastUsedAt && (!existing.lastUsedAt || claim.lastUsedAt > existing.lastUsedAt)) {
+						existing.lastUsedAt = claim.lastUsedAt;
+					}
+				} else {
+					usageByFile.set(claim.sourcePath, {
+						totalUsage: claim.usageCount,
+						lastUsedAt: claim.lastUsedAt,
+						claimCount: 1,
+					});
+				}
+			}
+
+			// Compute retention scores and archive low-scoring files
+			const now = new Date();
+			for (const filePath of archiveCandidates) {
+				const content = readFileSafe(filePath) ?? "";
+
+				// Extract metadata from file
+				const updatedMatch = content.match(/^updated_at:\s*(.+)$/m);
+				const _updatedAt = updatedMatch?.[1];
+				const confidenceMatch = content.match(/^confidence:\s*(.+)$/m);
+				const confidence = Number.parseFloat(confidenceMatch?.[1] ?? "0.5");
+				const stabilityMatch = content.match(/^stability:\s*(.+)$/m);
+				const stability = stabilityMatch?.[1] ?? "session";
+				const canonicalMatch = content.match(/^# Topic:\s*(.+)$/m);
+				const canonicalKey = canonicalMatch?.[1]?.trim() ?? path.basename(filePath, ".md");
+
+				// Get usage data from graph (or default to zero if not found)
+				const usage = usageByFile.get(filePath) ?? { totalUsage: 0, lastUsedAt: null, claimCount: 0 };
+
+				// Compute retention score
+				const score = computeRetentionScore({
+					canonicalKey,
+					usageCount: usage.totalUsage,
+					lastUsedAt: usage.lastUsedAt,
+					confidence,
+					stability,
+					now,
+				});
+
+				// Archive if score is low
+				if (shouldArchive(score)) {
+					if (archiveTopicFile(filePath)) {
+						archivedFiles.push(filePath);
+					}
+				}
+			}
+
+			if (archivedFiles.length > 0) {
+				console.log(`[pi-memory] Archived ${archivedFiles.length} cold topic file(s) during dream`);
 			}
 		}
 

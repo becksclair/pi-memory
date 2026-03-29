@@ -38,4 +38,16 @@ export interface GraphStore {
 	rebuildFromFiles(memoryRoot: string): Promise<void>;
 	/** Remove graph records for promoted claims whose source files no longer exist */
 	pruneStalePromotedClaims(existingPaths: string[]): Promise<number>;
+	/**
+	 * Get aggregated usage statistics for claims from specific source files.
+	 * Used for retention scoring to determine which memories should be archived.
+	 */
+	getClaimsUsageForSources(sourcePaths: string[]): Promise<
+		Array<{
+			sourcePath: string;
+			canonicalKey: string;
+			usageCount: number;
+			lastUsedAt: string | null;
+		}>
+	>;
 }

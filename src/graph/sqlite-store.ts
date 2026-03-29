@@ -564,6 +564,38 @@ export class SqliteGraphStore implements GraphStore {
 		return prunedCount;
 	}
 
+	async getClaimsUsageForSources(sourcePaths: string[]): Promise<
+		Array<{
+			sourcePath: string;
+			canonicalKey: string;
+			usageCount: number;
+			lastUsedAt: string | null;
+		}>
+	> {
+		const db = this.requireDb();
+		if (sourcePaths.length === 0) {
+			return [];
+		}
+
+		// Query usage data for claims from the specified source files
+		const rows = db
+			.prepare(
+				`SELECT source_path AS sourcePath, canonical_key AS canonicalKey, 
+				        usage_count AS usageCount, last_used_at AS lastUsedAt
+			 FROM claims 
+			 WHERE source_path IN (${sourcePaths.map(() => "?").join(", ")})
+			 AND source_checkpoint IS NULL`,
+			)
+			.all(...sourcePaths) as Array<{
+			sourcePath: string;
+			canonicalKey: string;
+			usageCount: number;
+			lastUsedAt: string | null;
+		}>;
+
+		return rows;
+	}
+
 	private requireDb() {
 		if (!this.db) {
 			throw new Error("Graph store is not open.");
