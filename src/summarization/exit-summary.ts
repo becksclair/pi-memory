@@ -175,7 +175,7 @@ export async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSu
 		return { summary: null, error: errorMsg, hasMessages: true };
 	}
 
-	const apiKey = await ctx.modelRegistry.getApiKey(model);
+	const apiKey = await ctx.modelRegistry.getApiKeyForProvider(model.provider);
 	if (!apiKey) {
 		return {
 			summary: null,
