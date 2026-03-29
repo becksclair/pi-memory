@@ -68,7 +68,6 @@ const MIN_DREAM_HOURS = 6;
 const MIN_PENDING_ITEMS = 1;
 const MAX_DIFF_LINES = 40;
 const MAX_DIFF_LINES_PER_SIDE = Math.max(1, Math.floor(MAX_DIFF_LINES / 2));
-const DREAM_LOCK_STALE_MS = 30 * 60 * 1000;
 
 function getTopicFiles() {
 	const files: string[] = [];
@@ -510,8 +509,6 @@ const DEFAULT_AUTO_TRIGGER_CONFIG: DreamAutoTriggerConfig = {
 	minCheckpointsSinceLastRun: 3,
 	minPromotedClaimsSinceLastRun: 5,
 };
-
-const COUNTER_LOCK_STALE_MS = 30_000; // 30 seconds
 
 function getCounterLockFile(): string {
 	return path.join(getDreamDir(), "counter.lock");
