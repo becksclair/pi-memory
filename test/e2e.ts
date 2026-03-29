@@ -21,6 +21,16 @@ const TIMEOUT_MS = 120_000; // 2 minutes per pi invocation
 const PI_E2E_PROVIDER = process.env.PI_E2E_PROVIDER;
 const PI_E2E_MODEL = process.env.PI_E2E_MODEL;
 
+/**
+ * Escape a string for safe use in shell commands.
+ * Wraps in single quotes and handles embedded single quotes safely.
+ */
+function shellEscape(str: string): string {
+	// Wrap in single quotes, replacing embedded ' with '\''
+	// This is the POSIX-safe way to escape shell arguments
+	return `'${str.replace(/'/g, "'\\''")}'`;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -40,11 +50,12 @@ function runPi(prompt: string, opts?: { timeout?: number; textMode?: boolean }):
 
 	// Escape the prompt for shell — use base64 encoding to avoid quoting issues
 	const promptB64 = Buffer.from(prompt).toString("base64");
-	const providerArg = PI_E2E_PROVIDER ? ` --provider "${PI_E2E_PROVIDER}"` : "";
-	const modelArg = PI_E2E_MODEL ? ` --model "${PI_E2E_MODEL}"` : "";
+	// Safely escape provider/model args to prevent shell injection from env vars
+	const providerArg = PI_E2E_PROVIDER ? ` --provider ${shellEscape(PI_E2E_PROVIDER)}` : "";
+	const modelArg = PI_E2E_MODEL ? ` --model ${shellEscape(PI_E2E_MODEL)}` : "";
 	const cmd =
 		`echo "${promptB64}" | base64 -d | ` +
-		`pi -p --mode ${mode}${providerArg}${modelArg} --no-extensions -e "${EXTENSION_PATH}" --no-session`;
+		`pi -p --mode ${mode}${providerArg}${modelArg} --no-extensions -e ${shellEscape(EXTENSION_PATH)} --no-session`;
 
 	let stdout: string;
 	let stderr = "";
