@@ -4,7 +4,6 @@ import {
 	getDreamDir,
 	getDreamLockFile,
 	getDreamStateFile,
-	getDreamTempDir,
 	getMemorySummaryFile,
 	getSkillFile,
 	getSkillsDir,
@@ -317,19 +316,29 @@ export function buildDreamStatus(): DreamStatus {
 		gateReasons.push(`pending items ${pendingItems} < ${MIN_PENDING_ITEMS}`);
 	}
 
-	// Check temp directory status
-	const tempDir = getDreamTempDir();
+	// Check temp directory status (per-run temp dirs: tmp-<pid>-<timestamp>)
+	const dreamDir = getDreamDir();
 	let tempExists = false;
-	let stagedFiles: string[] = [];
+	const stagedFiles: string[] = [];
 	let failedDirs: string[] = [];
 	try {
-		tempExists = fs.existsSync(tempDir);
-		if (tempExists) {
-			stagedFiles = fs.readdirSync(tempDir).filter((f) => f.endsWith(".md") || f.endsWith(".json"));
-		}
-		const dreamDir = path.dirname(tempDir);
 		if (fs.existsSync(dreamDir)) {
-			failedDirs = fs.readdirSync(dreamDir).filter((name) => name.startsWith("tmp.failed-"));
+			const entries = fs.readdirSync(dreamDir);
+			const tempDirs = entries.filter((name) => /^tmp-\d+-\d+$/.test(name));
+			tempExists = tempDirs.length > 0;
+			// Collect staged files from all active temp dirs
+			for (const dir of tempDirs) {
+				try {
+					const files = fs
+						.readdirSync(path.join(dreamDir, dir))
+						.filter((f) => f.endsWith(".md") || f.endsWith(".json"));
+					stagedFiles.push(...files.map((f) => `${dir}/${f}`));
+				} catch {
+					// Skip dirs we can't read
+				}
+			}
+			// Find failed temp dirs (tmp-<pid>-<timestamp>.failed-<timestamp>)
+			failedDirs = entries.filter((name) => /^tmp-\d+-\d+\.failed-\d+$/.test(name));
 		}
 	} catch {
 		// Best effort temp status

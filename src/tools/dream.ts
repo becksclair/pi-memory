@@ -101,7 +101,7 @@ export function createDreamTool(
 						content: [
 							{
 								type: "text",
-								text: `Dream run failed and was rolled back. Check dream/tmp.failed-* for forensic data.${errorDetail}\n${formatDreamStatus(nextStatus)}`,
+								text: `Dream run failed and was rolled back. Check dream/tmp-*.failed-* for forensic data.${errorDetail}\n${formatDreamStatus(nextStatus)}`,
 							},
 						],
 						details: {

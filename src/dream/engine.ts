@@ -1,13 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	getDreamDir,
-	getDreamStateFile,
-	getDreamTempDir,
-	getSkillsDir,
-	getTopicsDir,
-	readFileSafe,
-} from "../config/paths.js";
+import { getDreamDir, getDreamStateFile, getSkillsDir, getTopicsDir, readFileSafe } from "../config/paths.js";
 import { renderDurableMemorySummary } from "../durable/rebuild.js";
 import type { GraphStore } from "../graph/store.js";
 import {
@@ -151,6 +144,10 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 	// Acquire dream lock at the very start to prevent concurrent dreams from interfering
 	// This must happen before creating the temp dir to ensure exclusivity
 	if (!acquireDreamLock()) {
+		// Close graph store before early return to prevent connection leak
+		if (graphStore) {
+			await graphStore.close().catch(() => {});
+		}
 		return {
 			applied: false,
 			artifacts: [],
@@ -372,8 +369,12 @@ export function previewDreamStaging(): {
 	summaryWouldChange: boolean;
 	tempDirExists: boolean;
 } {
-	const tempDir = getDreamTempDir();
-	const tempDirExists = fs.existsSync(tempDir);
+	const dreamDir = getDreamDir();
+	// Check for any per-run temp dirs (tmp-<pid>-<timestamp>)
+	let tempDirExists = false;
+	if (fs.existsSync(dreamDir)) {
+		tempDirExists = fs.readdirSync(dreamDir).some((name) => /^tmp-\d+-\d+$/.test(name));
+	}
 	const archiveCandidates = getTopicFilesToArchive();
 
 	const summary = renderDurableMemorySummary();
@@ -388,36 +389,35 @@ export function previewDreamStaging(): {
 }
 
 export function getDreamTempStatus(): {
-	tempDir: string;
+	tempDirs: string[];
 	exists: boolean;
 	stagedFiles: string[];
 	failedDirs: string[];
 } {
-	const tempDir = getDreamTempDir();
 	const dreamDir = getDreamDir();
-	const exists = fs.existsSync(tempDir);
+	if (!fs.existsSync(dreamDir)) {
+		return { tempDirs: [], exists: false, stagedFiles: [], failedDirs: [] };
+	}
 
-	let stagedFiles: string[] = [];
-	if (exists) {
+	// Find all per-run temp dirs (tmp-<pid>-<timestamp>)
+	const allEntries = fs.readdirSync(dreamDir);
+	const tempDirs = allEntries.filter((name) => /^tmp-\d+-\d+$/.test(name));
+	const failedDirs = allEntries.filter((name) => /^tmp-\d+-\d+\.failed-\d+$/.test(name));
+
+	// Collect staged files from all active temp dirs
+	const stagedFiles: string[] = [];
+	for (const dir of tempDirs) {
 		try {
-			stagedFiles = fs.readdirSync(tempDir).filter((f) => f.endsWith(".md") || f.endsWith(".json"));
+			const files = fs.readdirSync(path.join(dreamDir, dir)).filter((f) => f.endsWith(".md") || f.endsWith(".json"));
+			stagedFiles.push(...files.map((f) => `${dir}/${f}`));
 		} catch {
-			stagedFiles = [];
+			// Skip dirs we can't read
 		}
 	}
 
-	// Look for failed temp directories
-	let failedDirs: string[] = [];
-	if (fs.existsSync(dreamDir)) {
-		failedDirs = fs
-			.readdirSync(dreamDir)
-			.filter((name) => name.startsWith("tmp.failed-"))
-			.sort();
-	}
-
 	return {
-		tempDir,
-		exists,
+		tempDirs,
+		exists: tempDirs.length > 0,
 		stagedFiles,
 		failedDirs,
 	};
@@ -429,7 +429,8 @@ export function cleanupFailedTempDirs(): number {
 		return 0;
 	}
 
-	const failedDirs = fs.readdirSync(dreamDir).filter((name) => name.startsWith("tmp.failed-"));
+	// Find all failed temp dirs (tmp-<pid>-<timestamp>.failed-<timestamp>)
+	const failedDirs = fs.readdirSync(dreamDir).filter((name) => /^tmp-\d+-\d+\.failed-\d+$/.test(name));
 
 	let cleaned = 0;
 	for (const dir of failedDirs) {
