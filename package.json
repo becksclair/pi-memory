@@ -48,7 +48,7 @@
 		"lint": "biome check .",
 		"rebuild:derived": "npx tsx scripts/rebuild-derived-memory.ts",
 		"spike:ryugraph": "npx tsx spikes/ryugraph-smoke.ts",
-		"test": "npm run test:graph && bun test test/unit/compatibility.test.ts test/unit/layout.test.ts test/unit/qmd-sdk.test.ts test/unit/recovery.test.ts test/unit/retrieval.test.ts test/unit/session-memory.test.ts test/unit.test.ts && bun test/unit.ts",
+		"test": "npm run test:graph && bun test test/unit/compatibility.test.ts test/unit/layout.test.ts test/unit/qmd-sdk.test.ts test/unit/recovery.test.ts test/unit/retrieval.test.ts test/unit/session-memory.test.ts test/unit.test.ts && bun test/unit.ts && bun test test/unit/bun-lifecycle.test.ts test/unit/graph-bun.test.ts",
 		"test:graph": "node --import tsx --test test/unit/graph-store.test.ts test/unit/graph-runtime.test.ts",
 		"test:unit": "npm run test:graph && bun test test/unit/compatibility.test.ts test/unit/layout.test.ts test/unit/qmd-sdk.test.ts test/unit/recovery.test.ts test/unit/retrieval.test.ts test/unit/session-memory.test.ts test/unit.test.ts && bun test/unit.ts",
 		"test:e2e": "npx tsx test/e2e.ts",

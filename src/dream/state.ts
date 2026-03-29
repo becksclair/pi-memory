@@ -172,11 +172,10 @@ function isProcessRunning(pid: number): boolean {
 }
 
 function isStaleDreamLock(lock: DreamLock) {
-	const startedAt = new Date(lock.startedAt).getTime();
-	const isTimeStale = Number.isFinite(startedAt) ? Date.now() - startedAt > DREAM_LOCK_STALE_MS : true;
-	// Liveness-aware: also check if owning process is still running
+	// Liveness-aware: lock is stale only if owning process is dead
+	// Time-based staleness removed to prevent lock stealing from live long-running processes
 	const isOwnerDead = !isProcessRunning(lock.pid);
-	return isTimeStale || isOwnerDead;
+	return isOwnerDead;
 }
 
 export function acquireDreamLock() {
@@ -523,11 +522,10 @@ export function acquireCounterLock(): boolean {
 	if (fs.existsSync(lockPath)) {
 		try {
 			const existing = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as { startedAt: string; pid: number };
-			const startedAt = new Date(existing.startedAt).getTime();
-			const isTimeStale = Number.isFinite(startedAt) && Date.now() - startedAt > COUNTER_LOCK_STALE_MS;
-			// Liveness-aware: also check if owning process is still running
+			// Liveness-aware: lock is stale only if owning process is dead
+			// Time-based staleness removed to prevent lock stealing from live long-running processes
 			const isOwnerDead = !isProcessRunning(existing.pid);
-			if (isTimeStale || isOwnerDead) {
+			if (isOwnerDead) {
 				fs.unlinkSync(lockPath);
 			} else {
 				return false;
