@@ -437,7 +437,7 @@ export function formatDreamStatus(status: DreamStatus) {
 		`- Pending items: ${status.pendingItems}`,
 		`- Checkpoints since last run: ${status.checkpointsSinceLastRun}`,
 		`- Promoted claims since last run: ${status.promotedClaimsSinceLastRun}`,
-		`- Locked: ${status.locked ? `yes (${status.lockStartedAt})` : status.lockStale ? "no (stale lock cleaned)" : "no"}`,
+		`- Locked: ${status.locked ? `yes (${status.lockStartedAt})` : status.lockStale ? "no (stale lock exists but will be cleaned on next acquire)" : "no"}`,
 		`- Can run: ${status.canRun ? "yes" : "no"}`,
 		`- Auto-trigger: ${status.autoTrigger.shouldTrigger ? "ready" : "waiting"}`,
 		...(status.autoTrigger.reasons.length > 0
