@@ -16,8 +16,9 @@ const TIMEOUT_MS = 120_000; // 2 minutes per pi invocation
 
 // Optional: pin provider/model for deterministic CI runs.
 // Examples:
-//   PI_E2E_PROVIDER=openai
-//   PI_E2E_MODEL=gpt-4o-mini
+//   PI_E2E_PROVIDER=openai-codex
+//   PI_E2E_MODEL=gpt-5.4-mini
+// CI uses: openai-codex / gpt-5.4-mini
 const PI_E2E_PROVIDER = process.env.PI_E2E_PROVIDER;
 const PI_E2E_MODEL = process.env.PI_E2E_MODEL;
 
@@ -144,6 +145,7 @@ function backupFile(filePath: string) {
 function restoreFile(filePath: string) {
 	const backup = filePath + BACKUP_SUFFIX;
 	if (fs.existsSync(backup)) {
+		// Copy then delete backup only on success - if copy fails, backup remains for recovery
 		fs.copyFileSync(backup, filePath);
 		fs.unlinkSync(backup);
 	} else if (fs.existsSync(filePath)) {

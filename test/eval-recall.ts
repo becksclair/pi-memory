@@ -14,9 +14,9 @@
  * Run:   bun test/eval-recall.ts
  *
  * Options:
- *   PI_E2E_PROVIDER=openai     Pin provider
- *   PI_E2E_MODEL=gpt-4o-mini   Pin model (recommended for cost)
- *   EVAL_RUNS=1                Number of runs per condition (default: 1)
+ *   PI_E2E_PROVIDER=openai-codex         Pin provider (CI uses this)
+ *   PI_E2E_MODEL=gpt-5.4-mini            Pin model (CI uses this)
+ *   EVAL_RUNS=1                          Number of runs per condition (default: 1)
  */
 
 import { execSync } from "node:child_process";
@@ -38,6 +38,16 @@ const TIMEOUT_MS = 120_000;
 const PI_E2E_PROVIDER = process.env.PI_E2E_PROVIDER;
 const PI_E2E_MODEL = process.env.PI_E2E_MODEL;
 const EVAL_RUNS = parseInt(process.env.EVAL_RUNS ?? "1", 10);
+
+/**
+ * Escape a string for safe use in shell commands.
+ * Wraps in single quotes and handles embedded single quotes safely.
+ */
+function shellEscape(str: string): string {
+	// Wrap in single quotes, replacing embedded ' with '\''
+	// This is the POSIX-safe way to escape shell arguments
+	return `'${str.replace(/'/g, "'\\''")}'`;
+}
 
 // ---------------------------------------------------------------------------
 // Memory corpus — diverse topics, varying ages
@@ -335,11 +345,11 @@ interface PiResult {
 
 function runPi(prompt: string, env?: Record<string, string>): PiResult {
 	const promptB64 = Buffer.from(prompt).toString("base64");
-	const providerArg = PI_E2E_PROVIDER ? ` --provider "${PI_E2E_PROVIDER}"` : "";
-	const modelArg = PI_E2E_MODEL ? ` --model "${PI_E2E_MODEL}"` : "";
+	const providerArg = PI_E2E_PROVIDER ? ` --provider ${shellEscape(PI_E2E_PROVIDER)}` : "";
+	const modelArg = PI_E2E_MODEL ? ` --model ${shellEscape(PI_E2E_MODEL)}` : "";
 	const cmd =
 		`echo "${promptB64}" | base64 -d | ` +
-		`pi -p --mode json${providerArg}${modelArg} -e "${EXTENSION_PATH}" --no-session`;
+		`pi -p --mode json${providerArg}${modelArg} -e ${shellEscape(EXTENSION_PATH)} --no-session`;
 
 	const envVars = { ...process.env, ...env };
 
@@ -393,6 +403,7 @@ function backupFile(filePath: string) {
 function restoreFile(filePath: string) {
 	const backup = filePath + BACKUP_SUFFIX;
 	if (fs.existsSync(backup)) {
+		// Copy then delete backup only on success - if copy fails, backup remains for recovery
 		fs.copyFileSync(backup, filePath);
 		fs.unlinkSync(backup);
 	} else if (fs.existsSync(filePath)) {
@@ -590,7 +601,7 @@ function main() {
 	// Preflight: check pi
 	process.stdout.write("Checking pi CLI ... ");
 	try {
-		const result = execSync(`echo "say OK" | pi -p --mode text -e "${EXTENSION_PATH}" --no-session`, {
+		const result = execSync(`echo "say OK" | pi -p --mode text -e ${shellEscape(EXTENSION_PATH)} --no-session`, {
 			timeout: 60_000,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],

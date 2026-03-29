@@ -106,6 +106,7 @@ function createLifecycleCtx(options?: {
 		model: options?.model === null ? undefined : (options?.model ?? undefined),
 		modelRegistry: {
 			getApiKey: async () => options?.apiKey,
+			find: (_provider: string, _modelId: string) => options?.model ?? undefined,
 		},
 		ui: {
 			notify,
@@ -318,7 +319,7 @@ describe("generateExitSummary", () => {
 		});
 		await expect(generateExitSummary(ctx as any)).resolves.toEqual({
 			summary: null,
-			error: "No active model",
+			error: "Summarization model not found: google/gemini-3-flash-preview (configured in ~/.pi/agent/settings.json)",
 			hasMessages: true,
 		});
 	});
@@ -1155,7 +1156,9 @@ describe("lifecycle hooks", () => {
 		await hooks.session_shutdown({}, ctx);
 		const content = readFileSafe(dailyPath(todayStr())) ?? "";
 		expect(content).toContain("## Session Summary");
-		expect(content).toContain("Auto-summary unavailable: No active model.");
+		expect(content).toContain(
+			"Auto-summary unavailable: Summarization model not found: google/gemini-3-flash-preview",
+		);
 	});
 
 	test("session_shutdown does not write a summary when there are no messages", async () => {

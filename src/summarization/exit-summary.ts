@@ -1,4 +1,7 @@
-import { complete, type Message } from "@mariozechner/pi-ai";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { type Api, complete, type Message, type Model } from "@mariozechner/pi-ai";
 import {
 	convertToLlm,
 	type ExtensionContext,
@@ -15,11 +18,72 @@ interface ExitSummaryResult {
 	hasMessages: boolean;
 }
 
+interface SummarizationSettings {
+	provider: string;
+	model: string;
+}
+
+interface SettingsJson {
+	summarization?: SummarizationSettings;
+	[key: string]: unknown;
+}
+
 const EXIT_SUMMARY_SYSTEM_PROMPT = [
 	"You are a session recap assistant.",
 	"Read the conversation and extract key decisions, lessons learned, notes, and follow-ups.",
 	"Return ONLY markdown in the specified format, without any extra commentary.",
 ].join("\n");
+
+/**
+ * Read summarization settings from ~/.pi/agent/settings.json
+ * Returns undefined if file doesn't exist, has no summarization config,
+ * or if provider/model are not both set.
+ *
+ * All errors (file not found, malformed JSON, permission denied) are treated
+ * as "no config" and return undefined silently — this is best-effort config
+ * loading where missing settings should not break the summarization flow.
+ */
+function readSummarizationSettings(): SummarizationSettings | undefined {
+	try {
+		const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+		const content = fs.readFileSync(settingsPath, "utf-8");
+		const settings = JSON.parse(content) as SettingsJson;
+		const s = settings.summarization;
+		// Only return if both provider and model are non-empty strings
+		if (s && typeof s.provider === "string" && s.provider.trim() && typeof s.model === "string" && s.model.trim()) {
+			return { provider: s.provider.trim(), model: s.model.trim() };
+		}
+		return undefined;
+	} catch {
+		// All errors (ENOENT, EACCES, JSON parse errors) treated as "no config"
+		return undefined;
+	}
+}
+
+interface SummarizationModelResult {
+	model: Model<Api> | undefined;
+	configured?: { provider: string; model: string };
+}
+
+/**
+ * Get the effective model for summarization.
+ * Precedence: settings.json (if both provider and model set) → ctx.model → google/gemini-3-flash-preview
+ *
+ * If settings.json specifies a model that cannot be found in the registry, returns
+ * configured info with undefined model so caller can produce a helpful error message.
+ */
+function getSummarizationModel(ctx: ExtensionContext): SummarizationModelResult {
+	const settings = readSummarizationSettings();
+	if (settings) {
+		const model = ctx.modelRegistry.find(settings.provider, settings.model);
+		// If user explicitly configured a model but it's not found, return configured
+		// info so caller can error with helpful message — don't silently fall through.
+		if (!model) return { model: undefined, configured: settings };
+		return { model };
+	}
+	if (ctx.model) return { model: ctx.model };
+	return { model: ctx.modelRegistry.find("google", "gemini-3-flash-preview") };
+}
 
 function formatExitSummaryReason(reason: ExitSummaryReason): string {
 	if (reason === "ctrl+d") return "ctrl+d";
@@ -89,21 +153,6 @@ export function formatExitSummaryEntry(
 	return [`<!-- ${timestamp} [${sessionId}] -->`, header, "", summary.trim()].join("\n");
 }
 
-async function getModelApiKey(ctx: ExtensionContext, model: { provider: string; id: string }) {
-	const registry = ctx.modelRegistry as unknown as {
-		getApiKey?: (candidateModel: unknown) => Promise<string | undefined>;
-		getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
-	};
-
-	if (typeof registry.getApiKey === "function") {
-		return registry.getApiKey(model);
-	}
-	if (typeof registry.getApiKeyForProvider === "function") {
-		return registry.getApiKeyForProvider(model.provider);
-	}
-	throw new Error("Pi modelRegistry does not expose getApiKey() or getApiKeyForProvider().");
-}
-
 export async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSummaryResult> {
 	if (!ctx.sessionManager || typeof ctx.sessionManager.getBranch !== "function") {
 		return { summary: null, hasMessages: false };
@@ -118,15 +167,19 @@ export async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSu
 		return { summary: null, hasMessages: false };
 	}
 
-	if (!ctx.model) {
-		return { summary: null, error: "No active model", hasMessages: true };
+	const { model, configured } = getSummarizationModel(ctx);
+	if (!model) {
+		const errorMsg = configured
+			? `Summarization model not found: ${configured.provider}/${configured.model} (configured in ~/.pi/agent/settings.json)`
+			: "Summarization model not found";
+		return { summary: null, error: errorMsg, hasMessages: true };
 	}
 
-	const apiKey = await getModelApiKey(ctx, ctx.model);
+	const apiKey = await ctx.modelRegistry.getApiKey(model);
 	if (!apiKey) {
 		return {
 			summary: null,
-			error: `No API key for ${ctx.model.provider}/${ctx.model.id}`,
+			error: `No API key for ${model.provider}/${model.id}`,
 			hasMessages: true,
 		};
 	}
@@ -148,7 +201,7 @@ export async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSu
 
 	try {
 		const response = await complete(
-			ctx.model,
+			model,
 			{ systemPrompt: EXIT_SUMMARY_SYSTEM_PROMPT, messages: summaryMessages },
 			{ apiKey, reasoningEffort: "low" },
 		);

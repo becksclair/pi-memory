@@ -183,6 +183,25 @@ When budget exceeded, lowest priority sections dropped first.
 | `PI_MEMORY_QMD_UPDATE` | `background`, `manual`, `off` | `background` | Auto-update qmd index after writes |
 | `PI_MEMORY_NO_SEARCH` | `1` | unset | Disable selective injection |
 
+### Session Summarization Model
+
+By default, session exit summaries use `google/gemini-3-flash-preview`. You can configure a different model by adding a `summarization` section to `~/.pi/agent/settings.json`:
+
+```json
+{
+  "summarization": {
+    "provider": "openai",
+    "model": "gpt-4o-mini"
+  }
+}
+```
+
+Precedence: settings.json → current session model → default (google/gemini-3-flash-preview)
+
+Both `provider` and `model` must be specified for the config to take effect. **If you explicitly configure a model that cannot be found in the registry, summarization will fail with an error showing the configured provider/model** — this ensures your configuration is respected.
+
+To use the fallback behavior, simply omit the `summarization` block from settings.json.
+
 ## Recovery
 
 Derived state (graph, qmd index, memory_summary.md) is disposable. If corrupted:

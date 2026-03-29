@@ -54,8 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      PI_E2E_PROVIDER: openai
-      PI_E2E_MODEL: gpt-4o-mini
+      PI_E2E_PROVIDER: openai-codex
+      PI_E2E_MODEL: gpt-5.4-mini
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

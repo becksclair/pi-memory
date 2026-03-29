@@ -87,6 +87,7 @@ function createLifecycleCtx(options?: {
 		model: options?.model === null ? undefined : (options?.model ?? undefined),
 		modelRegistry: {
 			getApiKey: async () => options?.apiKey,
+			find: (_provider: string, _modelId: string) => options?.model ?? undefined,
 		},
 		ui: {
 			notify,
