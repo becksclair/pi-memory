@@ -10,7 +10,8 @@ import {
 	todayStr,
 } from "./config/paths.js";
 import { buildMemoryBundle } from "./context/build-memory-bundle.js";
-import { incrementCheckpointCounter } from "./dream/state.js";
+import { runDreamWithStaging } from "./dream/engine.js";
+import { checkAutoDreamTrigger, incrementCheckpointCounter } from "./dream/state.js";
 import { buildGraphMemorySection, updateGraphFromCheckpoint } from "./graph/runtime.js";
 import { createSqliteGraphStore } from "./graph/sqlite-store.js";
 import type { GraphStore } from "./graph/store.js";
@@ -48,6 +49,29 @@ function createRuntimeState(options?: RegisterExtensionOptions): RuntimeState {
 		terminalInputUnsubscribe: null,
 		searchBackend: options?.searchBackend ?? createQmdSearchBackend(),
 	};
+}
+
+/**
+ * Check if auto-trigger conditions are met and run a lightweight dream if so.
+ * Called after checkpoint writes to automatically consolidate memory when
+ * enough activity has accumulated.
+ */
+async function maybeRunAutoDream(graphProvider: { getStore(): Promise<GraphStore | null> }) {
+	const trigger = checkAutoDreamTrigger();
+	if (!trigger.shouldTrigger) {
+		return null; // Conditions not met, skip auto-dream
+	}
+
+	// Auto-trigger conditions met - run a lightweight dream
+	try {
+		const graphStore = await graphProvider.getStore();
+		const result = await runDreamWithStaging(graphStore);
+		return result;
+	} catch (err) {
+		// Auto-dream failure is non-fatal; just log and continue
+		console.debug("[pi-memory] Auto-dream failed:", err instanceof Error ? err.message : String(err));
+		return null;
+	}
 }
 
 export default function registerExtension(pi: ExtensionAPI, options?: RegisterExtensionOptions) {
@@ -122,6 +146,8 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 					await updateGraphFromCheckpoint(checkpointResult);
 					// Increment checkpoint counter for auto-trigger tracking
 					incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);
+					// Check auto-trigger conditions and run dream if thresholds met
+					await maybeRunAutoDream(graphProvider);
 					await runtime.searchBackend.ensureReadyForUpdate();
 					await runtime.searchBackend.runUpdateNow();
 				}
@@ -228,6 +254,8 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 		await updateGraphFromCheckpoint(checkpointResult);
 		// Increment checkpoint counter for auto-trigger tracking
 		incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);
+		// Check auto-trigger conditions and run dream if thresholds met
+		await maybeRunAutoDream(graphProvider);
 		await runtime.searchBackend.ensureReadyForUpdate();
 		runtime.searchBackend.scheduleUpdate();
 	});

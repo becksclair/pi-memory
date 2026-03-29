@@ -493,13 +493,23 @@ export function releaseCounterLock(): void {
 	}
 }
 
-/** Increment checkpoint counter in dream state (thread-safe with file locking) */
+/**
+ * Increment checkpoint counter in dream state (thread-safe with file locking)
+ *
+ * NOTE: These counters are advisory/approximate, not authoritative. If the lock
+ * cannot be acquired (contention with another process), this increment is silently
+ * dropped. This is acceptable because:
+ * 1. Auto-trigger thresholds have safety margins (3 checkpoints, 5 claims)
+ * 2. A single dropped increment won't prevent triggering
+ * 3. Users can always run `dream` manually
+ * 4. Exact accounting would require an append-only event log (overkill for this use case)
+ */
 export function incrementCheckpointCounter(incrementPromotedClaims = 0): void {
 	// Acquire lock to prevent race conditions between concurrent sessions
 	if (!acquireCounterLock()) {
 		// Lock not acquired - another process is updating counters
-		// For simplicity, we skip this increment rather than retry
-		// In practice, this is rare and the counters are approximate
+		// We intentionally drop this increment rather than retry/block.
+		// The counters are advisory; occasional loss is acceptable.
 		return;
 	}
 	try {

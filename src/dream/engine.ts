@@ -232,26 +232,44 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 		// so they aren't lost when we commit the staged state with zeroed counters
 		let deltaCheckpoints = 0;
 		let deltaPromotedClaims = 0;
-		const counterLockAcquired = acquireCounterLock();
+
+		// Retry acquiring lock to avoid race with incrementCheckpointCounter
+		// If another process is updating counters, we need to wait for it to complete
+		// before reading state and computing delta
+		let counterLockAcquired = false;
+		for (let i = 0; i < 50; i++) {
+			counterLockAcquired = acquireCounterLock();
+			if (counterLockAcquired) break;
+			// Small delay between retries (10ms = 500ms total max wait)
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+
+		if (!counterLockAcquired) {
+			// Could not acquire lock after retries - another process is stuck or slow
+			// Abort to prevent race condition where concurrent write overwrites our commit
+			throw new Error(
+				"Could not acquire counter lock for dream commit. Another process may be updating counters. " +
+					"Retry the dream run after a moment.",
+			);
+		}
+
 		try {
-			if (counterLockAcquired) {
-				try {
-					const liveState = readDreamState();
-					const liveCheckpoints = liveState?.checkpointsSinceLastRun ?? 0;
-					const livePromotedClaims = liveState?.promotedClaimsSinceLastRun ?? 0;
-					// Compute delta: only carry forward increments that happened DURING the dream run
-					// (not all pre-dream activity which was already accounted for in triggering this run)
-					deltaCheckpoints = Math.max(0, liveCheckpoints - snapshotCheckpoints);
-					deltaPromotedClaims = Math.max(0, livePromotedClaims - snapshotPromotedClaims);
-				} catch {
-					// Best effort - if we can't read state, proceed with zeroed counters
-					deltaCheckpoints = 0;
-					deltaPromotedClaims = 0;
-				}
+			try {
+				const liveState = readDreamState();
+				const liveCheckpoints = liveState?.checkpointsSinceLastRun ?? 0;
+				const livePromotedClaims = liveState?.promotedClaimsSinceLastRun ?? 0;
+				// Compute delta: only carry forward increments that happened DURING the dream run
+				// (not all pre-dream activity which was already accounted for in triggering this run)
+				deltaCheckpoints = Math.max(0, liveCheckpoints - snapshotCheckpoints);
+				deltaPromotedClaims = Math.max(0, livePromotedClaims - snapshotPromotedClaims);
+			} catch {
+				// Best effort - if we can't read state, proceed with zeroed counters
+				deltaCheckpoints = 0;
+				deltaPromotedClaims = 0;
 			}
 
 			// Re-stage the state file with delta counters if we have any concurrent increments
-			if (counterLockAcquired && (deltaCheckpoints > 0 || deltaPromotedClaims > 0)) {
+			if (deltaCheckpoints > 0 || deltaPromotedClaims > 0) {
 				const mergedState = {
 					...nextState,
 					checkpointsSinceLastRun: deltaCheckpoints,
@@ -275,9 +293,7 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			}
 		} finally {
 			// Always release counter lock, even if an error occurred
-			if (counterLockAcquired) {
-				releaseCounterLock();
-			}
+			releaseCounterLock();
 		}
 
 		// Clean up temp dir on success

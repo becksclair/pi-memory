@@ -281,6 +281,7 @@ export class SqliteGraphStore implements GraphStore {
 			CREATE INDEX IF NOT EXISTS idx_claims_usage_count ON claims(usage_count);
 			CREATE INDEX IF NOT EXISTS idx_claims_updated_at ON claims(updated_at);
 			CREATE INDEX IF NOT EXISTS idx_edges_from_type ON edges(from_id, edge_type);
+			CREATE INDEX IF NOT EXISTS idx_edges_to_id ON edges(to_id);
 		`);
 	}
 
@@ -289,22 +290,26 @@ export class SqliteGraphStore implements GraphStore {
 		const sourceCheckpoint = `${checkpoint.sessionId}:${checkpoint.index}`;
 		const tx = db.transaction(() => {
 			this.upsertSessionRecord(checkpoint);
-			this.deleteSourceRecords(checkpoint.sourceEvidencePath, sourceCheckpoint);
+			// Capture usage metadata before deletion so we can preserve it on re-insert
+			const preservedMetadata = this.deleteSourceRecords(checkpoint.sourceEvidencePath, sourceCheckpoint);
 			for (const memory of checkpoint.candidateMemories) {
-				this.insertClaimFromMemory({
-					kind: memory.kind,
-					canonicalKey: memory.canonicalKey ?? deriveClaimCanonicalKey(memory.kind, memory.text),
-					text: memory.text,
-					scope: memory.scope,
-					sensitivity: memory.sensitivity,
-					status: "active",
-					confidence: memory.confidence,
-					stability: memory.stability,
-					sourcePath: checkpoint.sourceEvidencePath,
-					sourceCheckpoint,
-					createdAt: checkpoint.timestamp,
-					updatedAt: checkpoint.timestamp,
-				});
+				this.insertClaimFromMemory(
+					{
+						kind: memory.kind,
+						canonicalKey: memory.canonicalKey ?? deriveClaimCanonicalKey(memory.kind, memory.text),
+						text: memory.text,
+						scope: memory.scope,
+						sensitivity: memory.sensitivity,
+						status: "active",
+						confidence: memory.confidence,
+						stability: memory.stability,
+						sourcePath: checkpoint.sourceEvidencePath,
+						sourceCheckpoint,
+						createdAt: checkpoint.timestamp,
+						updatedAt: checkpoint.timestamp,
+					},
+					preservedMetadata,
+				);
 			}
 		});
 		tx();
@@ -317,25 +322,29 @@ export class SqliteGraphStore implements GraphStore {
 				if (!fs.existsSync(filePath)) {
 					continue;
 				}
-				this.deleteSourceRecords(filePath, null);
+				// Capture usage metadata before deletion so we can preserve it on re-insert
+				const preservedMetadata = this.deleteSourceRecords(filePath, null);
 				const claims = filePath.includes(`${path.sep}skills${path.sep}`)
 					? parseSkillClaims(filePath)
 					: parseTopicClaims(filePath);
 				for (const claim of claims) {
-					this.insertClaimFromMemory({
-						kind: claim.kind,
-						canonicalKey: claim.canonicalKey,
-						text: claim.text,
-						scope: claim.scope,
-						sensitivity: claim.sensitivity,
-						status: claim.status,
-						confidence: claim.confidence,
-						stability: claim.stability,
-						sourcePath: claim.sourcePath,
-						sourceCheckpoint: null,
-						createdAt: claim.createdAt,
-						updatedAt: claim.updatedAt,
-					});
+					this.insertClaimFromMemory(
+						{
+							kind: claim.kind,
+							canonicalKey: claim.canonicalKey,
+							text: claim.text,
+							scope: claim.scope,
+							sensitivity: claim.sensitivity,
+							status: claim.status,
+							confidence: claim.confidence,
+							stability: claim.stability,
+							sourcePath: claim.sourcePath,
+							sourceCheckpoint: null,
+							createdAt: claim.createdAt,
+							updatedAt: claim.updatedAt,
+						},
+						preservedMetadata,
+					);
 				}
 			}
 		});
@@ -507,17 +516,35 @@ export class SqliteGraphStore implements GraphStore {
 		);
 	}
 
-	private deleteSourceRecords(sourcePath: string, sourceCheckpoint: string | null) {
+	private deleteSourceRecords(
+		sourcePath: string,
+		sourceCheckpoint: string | null,
+	): Map<string, { lastUsedAt: string | null; usageCount: number }> {
 		const db = this.requireDb();
-		const claimRows = db
+
+		// Capture usage metadata BEFORE deleting so we can preserve it on re-insert
+		const metadataRows = db
 			.prepare(
-				`SELECT claim_id AS claimId
+				`SELECT claim_id AS claimId, last_used_at AS lastUsedAt, usage_count AS usageCount
 				 FROM claims
 				 WHERE source_path = ?
 				 ${sourceCheckpoint ? "OR source_checkpoint = ?" : ""}`,
 			)
-			.all(...(sourceCheckpoint ? [sourcePath, sourceCheckpoint] : [sourcePath])) as Array<{ claimId: string }>;
-		const claimIds = claimRows.map((row) => row.claimId);
+			.all(...(sourceCheckpoint ? [sourcePath, sourceCheckpoint] : [sourcePath])) as Array<{
+			claimId: string;
+			lastUsedAt: string | null;
+			usageCount: number;
+		}>;
+
+		const preservedMetadata = new Map<string, { lastUsedAt: string | null; usageCount: number }>();
+		for (const row of metadataRows) {
+			preservedMetadata.set(row.claimId, {
+				lastUsedAt: row.lastUsedAt,
+				usageCount: row.usageCount,
+			});
+		}
+
+		const claimIds = metadataRows.map((row) => row.claimId);
 		if (claimIds.length > 0) {
 			db.prepare(
 				`DELETE FROM edges WHERE from_id IN (${claimIds.map(() => "?").join(", ")}) OR to_id IN (${claimIds
@@ -534,22 +561,48 @@ export class SqliteGraphStore implements GraphStore {
 			 WHERE source_path = ?
 			 ${sourceCheckpoint ? "OR source_checkpoint = ?" : ""}`,
 		).run(...(sourceCheckpoint ? [sourcePath, sourceCheckpoint] : [sourcePath]));
+
+		// Prune orphaned entities that no longer have any associated claims or edges
+		this.pruneOrphanedEntities();
+
+		return preservedMetadata;
 	}
 
-	private insertClaimFromMemory(args: {
-		kind: CandidateMemory["kind"] | "skill";
-		canonicalKey: string;
-		text: string;
-		scope: string;
-		sensitivity: string;
-		status: ClaimStatus;
-		confidence: number;
-		stability: string;
-		sourcePath: string;
-		sourceCheckpoint: string | null;
-		createdAt: string;
-		updatedAt: string;
-	}) {
+	/**
+	 * Remove entities that have no associated claims or edges.
+	 * Called after claim deletion to prevent ghost entities from accumulating.
+	 */
+	private pruneOrphanedEntities() {
+		const db = this.requireDb();
+		// Delete entities that have no edges referencing them (entities are only connected via edges)
+		// Note: from_id/to_id have prefixes like "entity:my_key" while entity_id is just "my_key"
+		db.exec(`
+			DELETE FROM entities
+			WHERE NOT EXISTS (
+				SELECT 1 FROM edges
+				WHERE from_id = 'entity:' || entities.entity_id
+				   OR to_id = 'entity:' || entities.entity_id
+			)
+		`);
+	}
+
+	private insertClaimFromMemory(
+		args: {
+			kind: CandidateMemory["kind"] | "skill";
+			canonicalKey: string;
+			text: string;
+			scope: string;
+			sensitivity: string;
+			status: ClaimStatus;
+			confidence: number;
+			stability: string;
+			sourcePath: string;
+			sourceCheckpoint: string | null;
+			createdAt: string;
+			updatedAt: string;
+		},
+		preservedMetadata?: Map<string, { lastUsedAt: string | null; usageCount: number }>,
+	) {
 		const db = this.requireDb();
 		const claimId = hashId(
 			"claim",
@@ -560,6 +613,14 @@ export class SqliteGraphStore implements GraphStore {
 			args.text,
 			args.status,
 		);
+
+		// Use preserved metadata from before deletion, or check if claim still exists
+		const metadata =
+			preservedMetadata?.get(claimId) ??
+			(db
+				.prepare("SELECT last_used_at AS lastUsedAt, usage_count AS usageCount FROM claims WHERE claim_id = ?")
+				.get(claimId) as { lastUsedAt: string | null; usageCount: number } | undefined);
+
 		const claimRecord: StoredClaim = {
 			claimId,
 			kind: args.kind,
@@ -576,8 +637,9 @@ export class SqliteGraphStore implements GraphStore {
 			sourceCheckpoint: args.sourceCheckpoint,
 			createdAt: args.createdAt,
 			updatedAt: args.updatedAt,
-			lastUsedAt: null,
-			usageCount: 0,
+			// Preserve existing usage metadata if claim already exists
+			lastUsedAt: metadata?.lastUsedAt ?? null,
+			usageCount: metadata?.usageCount ?? 0,
 		};
 
 		db.prepare(
