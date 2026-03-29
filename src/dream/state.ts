@@ -437,7 +437,7 @@ export function formatDreamStatus(status: DreamStatus) {
 		`- Pending items: ${status.pendingItems}`,
 		`- Checkpoints since last run: ${status.checkpointsSinceLastRun}`,
 		`- Promoted claims since last run: ${status.promotedClaimsSinceLastRun}`,
-		`- Locked: ${status.locked ? `yes (${status.lockStartedAt})` : "no"}`,
+		`- Locked: ${status.locked ? `yes (${status.lockStartedAt})` : status.lockStale ? "no (stale lock cleaned)" : "no"}`,
 		`- Can run: ${status.canRun ? "yes" : "no"}`,
 		`- Auto-trigger: ${status.autoTrigger.shouldTrigger ? "ready" : "waiting"}`,
 		...(status.autoTrigger.reasons.length > 0
@@ -545,11 +545,26 @@ export function acquireCounterLock(): boolean {
 	}
 }
 
-export function releaseCounterLock(): void {
+export function releaseCounterLock(): boolean {
 	try {
-		fs.unlinkSync(getCounterLockFile());
+		const lockPath = getCounterLockFile();
+		// Only release if we own the lock (PID matches)
+		try {
+			const existing = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as { pid: number };
+			if (existing.pid !== process.pid) {
+				console.warn(
+					`[pi-memory] Cannot release counter lock: owned by PID ${existing.pid}, current PID ${process.pid}`,
+				);
+				return false;
+			}
+		} catch {
+			// Lock file missing or malformed - proceed with unlink best effort
+		}
+		fs.unlinkSync(lockPath);
+		return true;
 	} catch {
 		// Best effort - lock may already be absent
+		return false;
 	}
 }
 

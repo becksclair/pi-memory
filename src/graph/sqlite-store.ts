@@ -473,6 +473,36 @@ export class SqliteGraphStore implements GraphStore {
 
 	async rebuildFromFiles(memoryRoot: string) {
 		const db = this.requireDb();
+
+		// Capture usage metadata by LOGICAL IDENTITY (sourcePath + canonicalKey + kind)
+		// This survives text changes, status changes, and supersession
+		const usageRows = db
+			.prepare(
+				"SELECT source_path AS sourcePath, canonical_key AS canonicalKey, kind, usage_count AS usageCount, last_used_at AS lastUsedAt FROM claims WHERE usage_count > 0 OR last_used_at IS NOT NULL",
+			)
+			.all() as Array<{
+			sourcePath: string;
+			canonicalKey: string;
+			kind: string;
+			usageCount: number;
+			lastUsedAt: string | null;
+		}>;
+		const usageMetadata = new Map<string, { usageCount: number; lastUsedAt: string | null }>();
+		for (const row of usageRows) {
+			// Key by logical identity: sourcePath + canonicalKey + kind
+			const logicalKey = `${row.sourcePath}:${row.canonicalKey}:${row.kind}`;
+			// Aggregate: take max usage count, keep most recent lastUsedAt
+			const existing = usageMetadata.get(logicalKey);
+			if (existing) {
+				existing.usageCount = Math.max(existing.usageCount, row.usageCount);
+				if (row.lastUsedAt && (!existing.lastUsedAt || row.lastUsedAt > existing.lastUsedAt)) {
+					existing.lastUsedAt = row.lastUsedAt;
+				}
+			} else {
+				usageMetadata.set(logicalKey, { usageCount: row.usageCount, lastUsedAt: row.lastUsedAt });
+			}
+		}
+
 		db.exec("DELETE FROM edges; DELETE FROM claims; DELETE FROM entities; DELETE FROM sessions;");
 		const checkpointFiles = listCheckpointFiles(path.join(memoryRoot, "sessions"));
 		const checkpoints = checkpointFiles
@@ -485,6 +515,29 @@ export class SqliteGraphStore implements GraphStore {
 			...listTopicFiles(path.join(memoryRoot, "topics")),
 			...listSkillFiles(path.join(memoryRoot, "skills")),
 		]);
+
+		// Restore usage metadata by matching logical identity
+		let restoredCount = 0;
+		const allClaims = db
+			.prepare(
+				"SELECT claim_id AS claimId, source_path AS sourcePath, canonical_key AS canonicalKey, kind FROM claims",
+			)
+			.all() as Array<{ claimId: string; sourcePath: string; canonicalKey: string; kind: string }>;
+		for (const claim of allClaims) {
+			const logicalKey = `${claim.sourcePath}:${claim.canonicalKey}:${claim.kind}`;
+			const metadata = usageMetadata.get(logicalKey);
+			if (metadata) {
+				db.prepare("UPDATE claims SET usage_count = ?, last_used_at = ? WHERE claim_id = ?").run(
+					metadata.usageCount,
+					metadata.lastUsedAt,
+					claim.claimId,
+				);
+				restoredCount++;
+			}
+		}
+		if (restoredCount > 0) {
+			console.log(`[pi-memory] Restored usage metadata for ${restoredCount} claim(s) after rebuild`);
+		}
 	}
 
 	async pruneStalePromotedClaims(existingPaths: string[]): Promise<number> {
@@ -499,7 +552,10 @@ export class SqliteGraphStore implements GraphStore {
 		let prunedCount = 0;
 		for (const { sourcePath } of promotedRows) {
 			// If this source path is a topic/skill file that no longer exists, delete it
-			if (!existingSet.has(sourcePath) && (sourcePath.includes("/topics/") || sourcePath.includes("/skills/"))) {
+			if (
+				!existingSet.has(sourcePath) &&
+				(sourcePath.includes(`${path.sep}topics${path.sep}`) || sourcePath.includes(`${path.sep}skills${path.sep}`))
+			) {
 				this.deleteSourceRecords(sourcePath, null);
 				prunedCount++;
 			}
