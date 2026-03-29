@@ -10,11 +10,12 @@ export interface PreparedStatementWrapper {
 	/**
 	 * Executes the prepared statement with the given parameters.
 	 * @returns Object containing:
-	 *   - changes: Number of rows affected. NOTE: On Bun runtime, this is always 1 (optimistic)
-	 *     because bun:sqlite does not expose changes count. Use lastInsertRowid for reliable results.
+	 *   - changes: Number of rows affected. NOTE: This is `undefined` on Bun runtime because
+	 *     bun:sqlite does not expose changes count. Only use this for logging/metrics, never
+	 *     for correctness. Use lastInsertRowid for reliable results.
 	 *   - lastInsertRowid: The row ID of the last inserted row. This is accurate on all runtimes.
 	 */
-	run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+	run(...params: unknown[]): { changes: number | undefined; lastInsertRowid: number | bigint };
 	get(...params: unknown[]): Record<string, unknown> | undefined;
 	all(...params: unknown[]): Record<string, unknown>[];
 }
@@ -64,12 +65,11 @@ class BunStatementWrapper implements PreparedStatementWrapper {
 	run(...params: unknown[]) {
 		// bun:sqlite's run() returns void, unlike better-sqlite3 which returns changes/lastInsertRowid
 		// We use db.lastInsertRowId for the last inserted row ID (if available)
-		// Note: changes count is NOT available in bun:sqlite. We return changes: 1 as optimistic default.
-		// This is a KNOWN LIMITATION - code should not rely on accurate changes count when using Bun runtime.
-		// lastInsertRowid is accurate and can be relied upon.
+		// Note: changes count is NOT available in bun:sqlite. We return undefined to be honest about this.
+		// Code should not rely on changes count for correctness - use lastInsertRowid instead.
 		this.stmt.run(...params);
 		const lastInsertRowid = this.db.lastInsertRowId ?? 0;
-		return { changes: 1, lastInsertRowid };
+		return { changes: undefined, lastInsertRowid };
 	}
 
 	get(...params: unknown[]) {
