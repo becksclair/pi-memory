@@ -303,6 +303,41 @@ describe("session scaffolding", () => {
 		expect(bunTopic).not.toContain("dark mode");
 	});
 
+	test("contradictory durable preferences supersede older active entries", () => {
+		writeSessionCheckpoint({
+			sessionId: "theme-session-one",
+			trigger: "session_before_compact",
+			timestamp: "2026-03-28 23:38:00",
+			messageCount: 2,
+			userMessageCount: 1,
+			assistantMessageCount: 1,
+			otherMessageCount: 0,
+			summaryMarkdown: "### Decisions\n- None.\n### Follow-ups\n- None.",
+			summarySource: "stub",
+			evidenceMarkdown: "# Session Evidence\n\nUser: I prefer dark mode for editor themes.",
+		});
+
+		writeSessionCheckpoint({
+			sessionId: "theme-session-two",
+			trigger: "session_shutdown",
+			timestamp: "2026-03-28 23:39:00",
+			messageCount: 2,
+			userMessageCount: 1,
+			assistantMessageCount: 1,
+			otherMessageCount: 0,
+			summaryMarkdown: "### Decisions\n- None.\n### Follow-ups\n- None.",
+			summarySource: "stub",
+			evidenceMarkdown: "# Session Evidence\n\nUser: I prefer light mode for editor themes.",
+		});
+
+		const topic = fs.readFileSync(getTopicFile("preferences", "preference-editor-themes"), "utf-8");
+		expect(topic).toContain("- I prefer light mode for editor themes.");
+		expect(topic).toContain("## Superseded");
+		expect(topic).toContain("I prefer dark mode for editor themes. (superseded 2026-03-28 23:39:00)");
+		const activePreferencesSection = topic.split("## Preferences")[1]?.split("## Relations")[0] ?? "";
+		expect(activePreferencesSection).not.toContain("dark mode");
+	});
+
 	test("contradictory durable topic memories supersede older active entries", () => {
 		writeSessionCheckpoint({
 			sessionId: "house-session-one",

@@ -7,7 +7,7 @@ import {
 	todayStr,
 	yesterdayStr,
 } from "../config/paths.js";
-import { formatDurableMemoryHits, getRelevantDurableMemories } from "../durable/retrieval.js";
+import { type DurableMemoryHit, formatDurableMemoryHits, getRelevantDurableMemories } from "../durable/retrieval.js";
 import {
 	formatRecentSessionSummaries,
 	getCurrentSessionSummary,
@@ -30,13 +30,30 @@ import {
 } from "../shared/preview.js";
 import { parseScratchpad, serializeScratchpad } from "./scratchpad.js";
 
-export function buildMemoryContext(searchResults?: string, options?: { prompt?: string; sessionId?: string }): string {
+/**
+ * Build memory context string for injection into system prompt.
+ * @deprecated Use buildMemoryBundle() for new code. This function maintains
+ * legacy section ordering for backward compatibility with existing callers.
+ * Differences from buildMemoryBundle:
+ * - Includes "## Durable topics and skills" section (from getRelevantDurableMemories)
+ * - Omits "## memory_summary.md" section
+ * - Different section ordering (daily-today before search)
+ */
+export function buildMemoryContext(
+	searchResults?: string,
+	options?: {
+		prompt?: string;
+		sessionId?: string;
+		graphSection?: string;
+		durableMemories?: DurableMemoryHit[];
+	},
+): string {
 	ensureDirs();
 	const sections: string[] = [];
 
 	const scratchpad = readFileSafe(getScratchpadFile());
 	if (scratchpad?.trim()) {
-		const openItems = parseScratchpad(scratchpad).filter((i) => !i.done);
+		const openItems = parseScratchpad(scratchpad).filter((item) => !item.done);
 		if (openItems.length > 0) {
 			const serialized = serializeScratchpad(openItems);
 			const section = formatContextSection(
@@ -62,7 +79,8 @@ export function buildMemoryContext(searchResults?: string, options?: { prompt?: 
 		if (section) sections.push(section);
 	}
 
-	const durableMemories = getRelevantDurableMemories({ prompt: options?.prompt, limit: 4 });
+	const durableMemories =
+		options?.durableMemories ?? getRelevantDurableMemories({ prompt: options?.prompt, limit: 4 });
 	if (durableMemories.length > 0) {
 		const section = formatContextSection(
 			"## Durable topics and skills",
@@ -92,7 +110,6 @@ export function buildMemoryContext(searchResults?: string, options?: { prompt?: 
 
 	const today = todayStr();
 	const yesterday = yesterdayStr();
-
 	const todayContent = readFileSafe(dailyPath(today));
 	if (todayContent?.trim()) {
 		const section = formatContextSection(
@@ -109,6 +126,17 @@ export function buildMemoryContext(searchResults?: string, options?: { prompt?: 
 		const section = formatContextSection(
 			"## Relevant memories (auto-retrieved)",
 			searchResults,
+			"start",
+			CONTEXT_SEARCH_MAX_LINES,
+			CONTEXT_SEARCH_MAX_CHARS,
+		);
+		if (section) sections.push(section);
+	}
+
+	if (options?.graphSection?.trim()) {
+		const section = formatContextSection(
+			"## Graph expansion",
+			options.graphSection,
 			"start",
 			CONTEXT_SEARCH_MAX_LINES,
 			CONTEXT_SEARCH_MAX_CHARS,

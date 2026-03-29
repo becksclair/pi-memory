@@ -123,6 +123,10 @@ export function getGraphDir() {
 	return state.graphDir;
 }
 
+export function getGraphDbFile() {
+	return path.join(getGraphDir(), "graph.sqlite");
+}
+
 export function getSearchDir() {
 	return state.searchDir;
 }

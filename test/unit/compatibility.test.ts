@@ -6,6 +6,7 @@ import * as path from "node:path";
 import registerExtension, {
 	_resetBaseDir,
 	_setBaseDir,
+	buildMemoryBundle,
 	buildMemoryContext,
 	ensureDirs,
 	getDreamLockFile,
@@ -182,9 +183,14 @@ describe("compatibility: memory_status", () => {
 		const searchModeResult = await mockPi.tools.memory_status.execute("call1c", { action: "status", mode: "search" });
 		expect(searchModeResult.content[0].text).toContain("Memory search status");
 
+		const graphModeResult = await mockPi.tools.memory_status.execute("call1d", { action: "status", mode: "graph" });
+		expect(graphModeResult.content[0].text).toContain("Memory graph status");
+
 		const rebuildResult = await mockPi.tools.memory_status.execute("call2", { action: "rebuild" });
 		expect(rebuildResult.content[0].text).toContain("Rebuilt memory summary");
 		expect(fs.readFileSync(getMemorySummaryFile(), "utf-8")).toContain("Dark mode [preferences]");
+		const bundle = buildMemoryBundle({ prompt: "dark mode" });
+		expect(bundle.text).toContain("memory_summary.md");
 	});
 });
 

@@ -71,6 +71,12 @@ export interface WriteSessionCheckpointArgs {
 	structured?: Partial<StructuredCheckpointFields>;
 }
 
+export interface WriteSessionCheckpointResult {
+	checkpoint: SessionCheckpointMeta;
+	promotion: ReturnType<typeof promoteCheckpointMemories>;
+	summaryPath: string;
+}
+
 function readSessionMeta(sessionId: string): SessionMeta | null {
 	try {
 		return JSON.parse(fs.readFileSync(getSessionMetaFile(sessionId), "utf-8")) as SessionMeta;
@@ -172,7 +178,7 @@ export function ensureSessionScaffold(args: EnsureSessionScaffoldArgs) {
 	return meta;
 }
 
-export function writeSessionCheckpoint(args: WriteSessionCheckpointArgs) {
+export function writeSessionCheckpoint(args: WriteSessionCheckpointArgs): WriteSessionCheckpointResult {
 	const { sessionId, trigger, timestamp, summaryMarkdown, summarySource, evidenceMarkdown, structured, ...stats } =
 		args;
 	ensureSessionScaffold({ sessionId, startedAt: timestamp });
@@ -244,8 +250,12 @@ export function writeSessionCheckpoint(args: WriteSessionCheckpointArgs) {
 		checkpointCount: index,
 		lastCheckpointIndex: index,
 	});
-	promoteCheckpointMemories(checkpoint);
-	rebuildDurableMemorySummary();
+	const promotion = promoteCheckpointMemories(checkpoint);
+	const summary = rebuildDurableMemorySummary();
 
-	return checkpoint;
+	return {
+		checkpoint,
+		promotion,
+		summaryPath: summary.summaryPath,
+	};
 }

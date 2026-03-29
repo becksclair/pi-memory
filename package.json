@@ -47,8 +47,10 @@
 		"build": "tsc -p tsconfig.json --noEmit",
 		"lint": "biome check .",
 		"rebuild:derived": "npx tsx scripts/rebuild-derived-memory.ts",
-		"test": "bun test test/unit test/unit.test.ts && bun test/unit.ts",
-		"test:unit": "bun test test/unit test/unit.test.ts && bun test/unit.ts",
+		"spike:ryugraph": "npx tsx spikes/ryugraph-smoke.ts",
+		"test": "npm run test:graph && bun test test/unit/compatibility.test.ts test/unit/layout.test.ts test/unit/qmd-sdk.test.ts test/unit/recovery.test.ts test/unit/retrieval.test.ts test/unit/session-memory.test.ts test/unit.test.ts && bun test/unit.ts",
+		"test:graph": "node --import tsx --test test/unit/graph-store.test.ts test/unit/graph-runtime.test.ts",
+		"test:unit": "npm run test:graph && bun test test/unit/compatibility.test.ts test/unit/layout.test.ts test/unit/qmd-sdk.test.ts test/unit/recovery.test.ts test/unit/retrieval.test.ts test/unit/session-memory.test.ts test/unit.test.ts && bun test/unit.ts",
 		"test:e2e": "npx tsx test/e2e.ts",
 		"test:eval": "npx tsx test/eval-recall.ts",
 		"test:all": "npm run lint && npm run build && npm run test"
@@ -68,6 +70,7 @@
 		"glob": "^13.0.3"
 	},
 	"optionalDependencies": {
-		"@tobilu/qmd": "^2.0.1"
+		"@tobilu/qmd": "^2.0.1",
+		"better-sqlite3": "^12.4.5"
 	}
 }

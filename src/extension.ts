@@ -9,7 +9,8 @@ import {
 	shortSessionId,
 	todayStr,
 } from "./config/paths.js";
-import { buildMemoryContext } from "./memory/context.js";
+import { buildMemoryBundle } from "./context/build-memory-bundle.js";
+import { buildGraphMemorySection, updateGraphFromCheckpoint } from "./graph/runtime.js";
 import { parseScratchpad } from "./memory/scratchpad.js";
 import { qmdInstallInstructions } from "./qmd/messages.js";
 import { createQmdSearchBackend, type SearchBackend } from "./qmd/search-backend.js";
@@ -106,7 +107,7 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 					fs.writeFileSync(filePath, existing + separator + entry, "utf-8");
 					const branch = typeof ctx.sessionManager.getBranch === "function" ? ctx.sessionManager.getBranch() : [];
 					const stats = countBranchMessages(branch);
-					writeSessionCheckpoint({
+					const checkpointResult = writeSessionCheckpoint({
 						sessionId: ctx.sessionManager.getSessionId(),
 						trigger: "session_shutdown",
 						timestamp: ts,
@@ -115,6 +116,7 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 						evidenceMarkdown: serializeSessionEvidence(branch),
 						...stats,
 					});
+					await updateGraphFromCheckpoint(checkpointResult);
 					await runtime.searchBackend.ensureReadyForUpdate();
 					await runtime.searchBackend.runUpdateNow();
 				}
@@ -133,14 +135,23 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		const prompt = event.prompt ?? "";
 		const skipSearch = process.env.PI_MEMORY_NO_SEARCH === "1";
-		const searchResults = skipSearch ? "" : await runtime.searchBackend.searchRelevantMemories(event.prompt ?? "");
+		const searchResults = skipSearch ? "" : await runtime.searchBackend.searchRelevantMemories(prompt);
+		const graphSection = skipSearch
+			? ""
+			: await buildGraphMemorySection({
+					prompt,
+					searchResults,
+				});
 		let memoryContext = "";
 		try {
-			memoryContext = buildMemoryContext(searchResults, {
-				prompt: event.prompt ?? "",
+			memoryContext = buildMemoryBundle({
+				prompt,
 				sessionId: ctx.sessionManager?.getSessionId?.(),
-			});
+				searchResults,
+				graphSection,
+			}).text;
 		} catch (err) {
 			console.debug("pi-memory: buildMemoryContext failed", err instanceof Error ? err.message : String(err));
 			return;
@@ -200,7 +211,7 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 		}
 		const branch = typeof ctx.sessionManager.getBranch === "function" ? ctx.sessionManager.getBranch() : [];
 		const stats = countBranchMessages(branch);
-		writeSessionCheckpoint({
+		const checkpointResult = writeSessionCheckpoint({
 			sessionId,
 			trigger: "session_before_compact",
 			timestamp: ts,
@@ -209,6 +220,7 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			evidenceMarkdown: serializeSessionEvidence(branch),
 			...stats,
 		});
+		await updateGraphFromCheckpoint(checkpointResult);
 		await runtime.searchBackend.ensureReadyForUpdate();
 		runtime.searchBackend.scheduleUpdate();
 	});

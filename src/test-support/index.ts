@@ -9,6 +9,7 @@ export {
 	getDreamDir,
 	getDreamLockFile,
 	getDreamStateFile,
+	getGraphDbFile,
 	getGraphDir,
 	getMemoryFile,
 	getMemorySummaryFile,
@@ -36,10 +37,17 @@ export {
 	todayStr,
 	yesterdayStr,
 } from "../config/paths.js";
+export { buildMemoryBundle, type MemoryBundle, type MemoryBundleOptions } from "../context/build-memory-bundle.js";
 export { type DurablePromotionResult, promoteCheckpointMemories } from "../durable/promotion.js";
 export { type DurableRebuildResult, rebuildDurableMemorySummary } from "../durable/rebuild.js";
 export { type RecoverDerivedMemoryResult, recoverDerivedMemory } from "../durable/recover.js";
 export { type DurableMemoryHit, formatDurableMemoryHits, getRelevantDurableMemories } from "../durable/retrieval.js";
+export {
+	buildGraphMemorySection,
+	getGraphStatus,
+	rebuildGraphFromMemoryRoot,
+	updateGraphFromCheckpoint,
+} from "../graph/runtime.js";
 export { buildMemoryContext } from "../memory/context.js";
 export { parseScratchpad, type ScratchpadItem, serializeScratchpad } from "../memory/scratchpad.js";
 export { qmdInstallInstructions } from "../qmd/messages.js";
@@ -48,6 +56,7 @@ export {
 	countBranchMessages,
 	ensureSessionScaffold,
 	type SessionCheckpointMeta,
+	type WriteSessionCheckpointResult,
 	writeSessionCheckpoint,
 } from "../session/checkpoint.js";
 export {

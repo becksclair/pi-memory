@@ -8,6 +8,7 @@ import {
 	getTopicFile,
 	type TopicCategory,
 } from "../config/paths.js";
+import { deriveClaimCanonicalKey } from "../graph/expand.js";
 import type { CandidateMemory } from "../session/extract.js";
 
 interface PromotionRecord {
@@ -211,23 +212,29 @@ function appendEvidence(content: string, evidenceItems: string[]) {
 	return updated;
 }
 
-function getLocationFactSubject(text: string) {
-	const match = text.match(/^(.+?)\s+(?:lives in|is in|moved to)\s+.+\.?$/i);
-	return match?.[1]?.trim().toLowerCase() ?? null;
+function deriveBulletCanonicalKey(kind: CandidateMemory["kind"], text: string) {
+	return deriveClaimCanonicalKey(kind, text).toLowerCase().trim();
 }
 
-function supersedeConflictingTopicEntries(content: string, sectionName: string, nextBullet: string, timestamp: string) {
+function supersedeConflictingTopicEntries(
+	content: string,
+	sectionName: string,
+	memory: CandidateMemory,
+	timestamp: string,
+) {
 	const currentBullets = getSectionBullets(content, sectionName);
-	if (currentBullets.includes(nextBullet)) {
+	if (currentBullets.includes(memory.text)) {
 		return setSectionBullets(content, sectionName, currentBullets);
 	}
-	const nextLocationSubject = getLocationFactSubject(nextBullet);
-	const conflictingBullets =
-		sectionName === "Stable facts" && nextLocationSubject
-			? currentBullets.filter((bullet) => getLocationFactSubject(bullet) === nextLocationSubject)
-			: [];
+	const targetKey = (memory.canonicalKey ?? deriveBulletCanonicalKey(memory.kind, memory.text)).toLowerCase().trim();
+	const conflictingBullets = currentBullets.filter((bullet) => {
+		if (bullet === memory.text) {
+			return false;
+		}
+		return deriveBulletCanonicalKey(memory.kind, bullet) === targetKey;
+	});
 	if (conflictingBullets.length === 0) {
-		return setSectionBullets(content, sectionName, [...currentBullets, nextBullet]);
+		return setSectionBullets(content, sectionName, [...currentBullets, memory.text]);
 	}
 	let updated = content;
 	for (const previousBullet of conflictingBullets) {
@@ -235,7 +242,7 @@ function supersedeConflictingTopicEntries(content: string, sectionName: string, 
 	}
 	return setSectionBullets(updated, sectionName, [
 		...currentBullets.filter((bullet) => !conflictingBullets.includes(bullet)),
-		nextBullet,
+		memory.text,
 	]);
 }
 
@@ -295,7 +302,7 @@ function promoteTopic(memory: CandidateMemory, checkpoint: SessionCheckpointLike
 		? fs.readFileSync(filePath, "utf-8")
 		: createTopicTemplate(displayName, category, memory, checkpoint.timestamp);
 	let updated = upsertMetadata(existing, "updated_at", checkpoint.timestamp);
-	updated = supersedeConflictingTopicEntries(updated, getTopicSection(memory), memory.text, checkpoint.timestamp);
+	updated = supersedeConflictingTopicEntries(updated, getTopicSection(memory), memory, checkpoint.timestamp);
 	updated = appendEvidence(updated, evidenceItems);
 	fs.writeFileSync(filePath, updated, "utf-8");
 	return filePath;

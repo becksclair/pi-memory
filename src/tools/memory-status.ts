@@ -16,11 +16,12 @@ import {
 } from "../config/paths.js";
 import { buildDreamStatus, formatDreamStatus } from "../dream/state.js";
 import { rebuildDurableMemorySummary } from "../durable/rebuild.js";
+import { getGraphStatus, rebuildGraphFromMemoryRoot } from "../graph/runtime.js";
 import type { SearchBackend } from "../qmd/search-backend.js";
 
 type RegisteredTool = Parameters<ExtensionAPI["registerTool"]>[0];
 
-type MemoryStatusMode = "summary" | "dream" | "search" | "all";
+type MemoryStatusMode = "summary" | "dream" | "search" | "graph" | "all";
 
 function countMarkdownFiles(dirPath: string) {
 	if (!fs.existsSync(dirPath)) {
@@ -98,6 +99,18 @@ function formatSummaryStatus(status: ReturnType<typeof buildSummaryStatus>) {
 	].join("\n");
 }
 
+function formatGraphStatus(status: Awaited<ReturnType<typeof getGraphStatus>>) {
+	return [
+		"Memory graph status",
+		`- Runtime available: ${status.available ? "yes" : "no"}`,
+		`- Graph path: ${status.dbPath}`,
+		`- Entities: ${status.stats?.entities ?? 0}`,
+		`- Claims: ${status.stats?.claims ?? 0}`,
+		`- Superseded claims: ${status.stats?.supersededClaims ?? 0}`,
+		`- Edges: ${status.stats?.edges ?? 0}`,
+	].join("\n");
+}
+
 function formatSearchStatus(status: Awaited<ReturnType<typeof buildSearchStatus>>) {
 	return [
 		"Memory search status",
@@ -127,7 +140,7 @@ export function createMemoryStatusTool(searchBackend: SearchBackend): Registered
 				description: "Inspect memory state or rebuild derived durable summary",
 			}),
 			mode: Type.Optional(
-				StringEnum(["summary", "dream", "search", "all"] as const, {
+				StringEnum(["summary", "dream", "search", "graph", "all"] as const, {
 					description: "Status view to show. Default: all.",
 				}),
 			),
@@ -139,20 +152,26 @@ export function createMemoryStatusTool(searchBackend: SearchBackend): Registered
 
 			if (action === "rebuild") {
 				const rebuild = rebuildDurableMemorySummary();
+				const graphRebuild = await rebuildGraphFromMemoryRoot(getMemoryDir());
 				await searchBackend.ensureReadyForUpdate();
 				searchBackend.scheduleUpdate();
 				const summaryStatus = buildSummaryStatus();
 				const dreamStatus = buildDreamStatus();
 				const searchStatus = await buildSearchStatus(searchBackend);
+				const graphStatus = await getGraphStatus();
 				return {
 					content: [
 						{
 							type: "text",
 							text: combineSections([
 								`Rebuilt memory summary: ${rebuild.summaryPath}`,
+								graphRebuild.rebuilt
+									? `Rebuilt graph: ${graphRebuild.dbPath}`
+									: `Graph rebuild skipped: ${graphRebuild.reason}`,
 								formatSummaryStatus(summaryStatus),
 								formatDreamStatus(dreamStatus),
 								formatSearchStatus(searchStatus),
+								formatGraphStatus(graphStatus),
 							]),
 						},
 					],
@@ -162,6 +181,8 @@ export function createMemoryStatusTool(searchBackend: SearchBackend): Registered
 						...summaryStatus,
 						dream: dreamStatus,
 						search: searchStatus,
+						graph: graphStatus,
+						graphRebuild,
 					},
 				};
 			}
@@ -169,13 +190,17 @@ export function createMemoryStatusTool(searchBackend: SearchBackend): Registered
 			const summaryStatus = buildSummaryStatus();
 			const dreamStatus = buildDreamStatus();
 			const searchStatus = await buildSearchStatus(searchBackend);
+			const graphStatus = await getGraphStatus();
 			const sections = {
 				summary: formatSummaryStatus(summaryStatus),
 				dream: formatDreamStatus(dreamStatus),
 				search: formatSearchStatus(searchStatus),
+				graph: formatGraphStatus(graphStatus),
 			};
 			const text =
-				mode === "all" ? combineSections([sections.summary, sections.dream, sections.search]) : sections[mode];
+				mode === "all"
+					? combineSections([sections.summary, sections.dream, sections.search, sections.graph])
+					: sections[mode];
 			return {
 				content: [{ type: "text", text }],
 				details: {
@@ -184,6 +209,7 @@ export function createMemoryStatusTool(searchBackend: SearchBackend): Registered
 					summary: summaryStatus,
 					dream: dreamStatus,
 					search: searchStatus,
+					graph: graphStatus,
 				},
 			};
 		},
