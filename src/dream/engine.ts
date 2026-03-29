@@ -10,7 +10,14 @@ import {
 } from "../config/paths.js";
 import { renderDurableMemorySummary } from "../durable/rebuild.js";
 import type { GraphStore } from "../graph/store.js";
-import { acquireCounterLock, buildNextDreamState, readDreamState, releaseCounterLock } from "./state.js";
+import {
+	acquireCounterLock,
+	acquireDreamLock,
+	buildNextDreamState,
+	readDreamState,
+	releaseCounterLock,
+	releaseDreamLock,
+} from "./state.js";
 
 export interface DreamEngineResult {
 	applied: boolean;
@@ -43,11 +50,12 @@ const RECENCY_WEIGHT = 0.3;
 const CONFIDENCE_WEIGHT = 0.2;
 const STABILITY_WEIGHT = 0.1;
 
-function ensureCleanTempDir() {
-	const tempDir = getDreamTempDir();
-	if (fs.existsSync(tempDir)) {
-		fs.rmSync(tempDir, { recursive: true, force: true });
-	}
+function createPerRunTempDir(): string {
+	// Use per-run temp dir to prevent concurrent dreams from deleting each other's staged files
+	// Format: tmp-<pid>-<timestamp> for uniqueness and debugging
+	const timestamp = Date.now();
+	const pid = process.pid;
+	const tempDir = path.join(getDreamDir(), `tmp-${pid}-${timestamp}`);
 	fs.mkdirSync(tempDir, { recursive: true });
 	return tempDir;
 }
@@ -140,9 +148,24 @@ function getTopicFilesToArchive(): string[] {
 }
 
 export async function runDreamWithStaging(graphStore: GraphStore | null): Promise<DreamEngineResult> {
-	const tempDir = ensureCleanTempDir();
+	// Acquire dream lock at the very start to prevent concurrent dreams from interfering
+	// This must happen before creating the temp dir to ensure exclusivity
+	if (!acquireDreamLock()) {
+		return {
+			applied: false,
+			artifacts: [],
+			graphUpdated: false,
+			rolledBack: false,
+			errorMessage: "Another dream is already running. Retry after it completes.",
+		};
+	}
+
+	// Use per-run temp dir to prevent concurrent dreams from deleting each other's staged files
+	const tempDir = createPerRunTempDir();
 	const artifacts: DreamArtifactResult[] = [];
 	let rolledBack = false;
+	let graphUpdated = false;
+	let graphSyncError: string | null = null;
 
 	// Snapshot counter values at start to compute delta later
 	// This lets us distinguish pre-dream activity from concurrent increments during the dream
@@ -190,41 +213,6 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			for (const _filePath of archiveCandidates) {
 				// Placeholder for retention scoring integration with graph data
 				// In a full implementation, we'd query claim usage data from graph
-			}
-		}
-
-		// Update graph if available (before commit, so failure doesn't leave half-committed state)
-		let graphUpdated = false;
-		if (graphStore) {
-			// Re-sync promoted claims with graph after dream updates
-			const topicFiles: string[] = [];
-			const topicsDir = getTopicsDir();
-			if (fs.existsSync(topicsDir)) {
-				for (const category of fs.readdirSync(topicsDir, { withFileTypes: true })) {
-					if (!category.isDirectory()) {
-						continue;
-					}
-					const categoryDir = path.join(topicsDir, category.name);
-					for (const fileName of fs.readdirSync(categoryDir)) {
-						if (fileName.endsWith(".md")) {
-							topicFiles.push(path.join(categoryDir, fileName));
-						}
-					}
-				}
-			}
-			const skillFiles: string[] = [];
-			const skillsDir = getSkillsDir();
-			if (fs.existsSync(skillsDir)) {
-				for (const fileName of fs.readdirSync(skillsDir)) {
-					if (fileName.endsWith(".md")) {
-						skillFiles.push(path.join(skillsDir, fileName));
-					}
-				}
-			}
-
-			if (topicFiles.length > 0 || skillFiles.length > 0) {
-				await graphStore.upsertPromotedClaims([...topicFiles, ...skillFiles]);
-				graphUpdated = true;
 			}
 		}
 
@@ -296,6 +284,50 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			releaseCounterLock();
 		}
 
+		// Sync graph AFTER file commit - files are the source of truth
+		// If graph sync fails, files are still committed (consistent state)
+		// Graph will be marked dirty and can be rebuilt later
+		if (graphStore) {
+			try {
+				// Re-sync promoted claims with graph after dream updates
+				const topicFiles: string[] = [];
+				const topicsDir = getTopicsDir();
+				if (fs.existsSync(topicsDir)) {
+					for (const category of fs.readdirSync(topicsDir, { withFileTypes: true })) {
+						if (!category.isDirectory()) {
+							continue;
+						}
+						const categoryDir = path.join(topicsDir, category.name);
+						for (const fileName of fs.readdirSync(categoryDir)) {
+							if (fileName.endsWith(".md")) {
+								topicFiles.push(path.join(categoryDir, fileName));
+							}
+						}
+					}
+				}
+				const skillFiles: string[] = [];
+				const skillsDir = getSkillsDir();
+				if (fs.existsSync(skillsDir)) {
+					for (const fileName of fs.readdirSync(skillsDir)) {
+						if (fileName.endsWith(".md")) {
+							skillFiles.push(path.join(skillsDir, fileName));
+						}
+					}
+				}
+
+				if (topicFiles.length > 0 || skillFiles.length > 0) {
+					await graphStore.upsertPromotedClaims([...topicFiles, ...skillFiles]);
+					graphUpdated = true;
+				}
+			} catch (err) {
+				// Graph sync failed after file commit - mark for later rebuild
+				graphSyncError = err instanceof Error ? err.message : String(err);
+				graphUpdated = false;
+				// Don't throw - files are the source of truth and are already committed
+				// Graph can be rebuilt later from disk state
+			}
+		}
+
 		// Clean up temp dir on success
 		fs.rmSync(tempDir, { recursive: true, force: true });
 
@@ -304,6 +336,7 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			artifacts,
 			graphUpdated,
 			rolledBack: false,
+			errorMessage: graphSyncError ?? undefined,
 		};
 	} catch (error) {
 		// Rollback: temp files remain in temp dir for inspection, but are not moved to live paths
@@ -326,7 +359,8 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 			errorMessage,
 		};
 	} finally {
-		// Always close graph store to prevent connection leaks
+		// Always release dream lock and close graph store
+		releaseDreamLock();
 		if (graphStore) {
 			await graphStore.close().catch(() => {});
 		}

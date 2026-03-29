@@ -523,28 +523,55 @@ export class SqliteGraphStore implements GraphStore {
 		const db = this.requireDb();
 
 		// Capture usage metadata BEFORE deleting so we can preserve it on re-insert
+		// Use logical identity (source_path, canonical_key, kind) rather than claim_id
+		// because claim_id includes text content - rewording would reset usage history
 		const metadataRows = db
 			.prepare(
-				`SELECT claim_id AS claimId, last_used_at AS lastUsedAt, usage_count AS usageCount
+				`SELECT canonical_key AS canonicalKey, kind, last_used_at AS lastUsedAt, usage_count AS usageCount
+				 FROM claims
+				 WHERE source_path = ?
+				 ${sourceCheckpoint ? "OR source_checkpoint = ?" : ""}`,
+			)
+			.all(...(sourceCheckpoint ? [sourcePath, sourceCheckpoint] : [sourcePath])) as Array<{
+			canonicalKey: string;
+			kind: string;
+			lastUsedAt: string | null;
+			usageCount: number;
+		}>;
+
+		// Key by logical identity: sourcePath + canonicalKey + kind
+		// This survives rewording, status changes, and supersession
+		const preservedMetadata = new Map<string, { lastUsedAt: string | null; usageCount: number }>();
+		for (const row of metadataRows) {
+			const logicalKey = `${sourcePath}:${row.canonicalKey}:${row.kind}`;
+			// Aggregate usage counts if multiple claims share the same logical identity
+			const existing = preservedMetadata.get(logicalKey);
+			if (existing) {
+				existing.usageCount = Math.max(existing.usageCount, row.usageCount);
+				// Keep the most recent lastUsedAt
+				if (row.lastUsedAt && (!existing.lastUsedAt || row.lastUsedAt > existing.lastUsedAt)) {
+					existing.lastUsedAt = row.lastUsedAt;
+				}
+			} else {
+				preservedMetadata.set(logicalKey, {
+					lastUsedAt: row.lastUsedAt,
+					usageCount: row.usageCount,
+				});
+			}
+		}
+
+		// Get claim IDs for edge deletion (separate query since we need claim_id for edge cleanup)
+		const claimIdRows = db
+			.prepare(
+				`SELECT claim_id AS claimId
 				 FROM claims
 				 WHERE source_path = ?
 				 ${sourceCheckpoint ? "OR source_checkpoint = ?" : ""}`,
 			)
 			.all(...(sourceCheckpoint ? [sourcePath, sourceCheckpoint] : [sourcePath])) as Array<{
 			claimId: string;
-			lastUsedAt: string | null;
-			usageCount: number;
 		}>;
-
-		const preservedMetadata = new Map<string, { lastUsedAt: string | null; usageCount: number }>();
-		for (const row of metadataRows) {
-			preservedMetadata.set(row.claimId, {
-				lastUsedAt: row.lastUsedAt,
-				usageCount: row.usageCount,
-			});
-		}
-
-		const claimIds = metadataRows.map((row) => row.claimId);
+		const claimIds = claimIdRows.map((row) => row.claimId);
 		if (claimIds.length > 0) {
 			db.prepare(
 				`DELETE FROM edges WHERE from_id IN (${claimIds.map(() => "?").join(", ")}) OR to_id IN (${claimIds
@@ -614,9 +641,11 @@ export class SqliteGraphStore implements GraphStore {
 			args.status,
 		);
 
-		// Use preserved metadata from before deletion, or check if claim still exists
+		// Use preserved metadata from before deletion (keyed by logical identity), or check if claim still exists
+		// Logical identity = sourcePath + canonicalKey + kind - survives rewording and status changes
+		const logicalKey = `${args.sourcePath}:${args.canonicalKey}:${args.kind}`;
 		const metadata =
-			preservedMetadata?.get(claimId) ??
+			preservedMetadata?.get(logicalKey) ??
 			(db
 				.prepare("SELECT last_used_at AS lastUsedAt, usage_count AS usageCount FROM claims WHERE claim_id = ?")
 				.get(claimId) as { lastUsedAt: string | null; usageCount: number } | undefined);

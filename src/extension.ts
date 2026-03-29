@@ -59,18 +59,25 @@ function createRuntimeState(options?: RegisterExtensionOptions): RuntimeState {
 async function maybeRunAutoDream(graphProvider: { getStore(): Promise<GraphStore | null> }) {
 	const trigger = checkAutoDreamTrigger();
 	if (!trigger.shouldTrigger) {
-		return null; // Conditions not met, skip auto-dream
+		return { applied: false, skipped: true, reason: trigger.reasons.join(", ") };
 	}
 
 	// Auto-trigger conditions met - run a lightweight dream
 	try {
 		const graphStore = await graphProvider.getStore();
 		const result = await runDreamWithStaging(graphStore);
+		// Log failures so they don't silently vanish
+		if (!result.applied) {
+			console.warn("[pi-memory] Auto-dream did not apply:", result.errorMessage || "Unknown reason");
+		} else if (result.errorMessage) {
+			// Applied but with warnings (e.g., graph sync failed)
+			console.debug("[pi-memory] Auto-dream applied with warnings:", result.errorMessage);
+		}
 		return result;
 	} catch (err) {
 		// Auto-dream failure is non-fatal; just log and continue
-		console.debug("[pi-memory] Auto-dream failed:", err instanceof Error ? err.message : String(err));
-		return null;
+		console.warn("[pi-memory] Auto-dream failed:", err instanceof Error ? err.message : String(err));
+		return { applied: false, error: err instanceof Error ? err.message : String(err) };
 	}
 }
 

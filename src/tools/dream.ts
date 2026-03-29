@@ -8,14 +8,7 @@ import {
 	previewDreamStaging,
 	runDreamWithStaging,
 } from "../dream/engine.js";
-import {
-	acquireDreamLock,
-	buildDreamPreviewArtifacts,
-	buildDreamStatus,
-	formatDreamPreview,
-	formatDreamStatus,
-	releaseDreamLock,
-} from "../dream/state.js";
+import { buildDreamPreviewArtifacts, buildDreamStatus, formatDreamPreview, formatDreamStatus } from "../dream/state.js";
 import { renderDurableMemorySummary } from "../durable/rebuild.js";
 import type { GraphStore } from "../graph/store.js";
 import type { SearchBackend } from "../qmd/search-backend.js";
@@ -86,64 +79,63 @@ export function createDreamTool(
 						details: { action, ...status },
 					};
 				}
-				if (!acquireDreamLock()) {
+				// Get graph store if available
+				const graphStore = graphProvider ? await graphProvider.getStore() : null;
+
+				// Run dream with atomic staging (engine handles locking internally)
+				const result = await runDreamWithStaging(graphStore);
+
+				// Handle engine-level lock failure (another dream running)
+				if (!result.applied && result.errorMessage?.includes("Another dream is already running")) {
 					const lockedStatus = buildDreamStatus();
 					return {
 						content: [{ type: "text", text: `Dream run blocked.\n${formatDreamStatus(lockedStatus)}` }],
 						details: { action, ...lockedStatus },
 					};
 				}
-				try {
-					// Get graph store if available
-					const graphStore = graphProvider ? await graphProvider.getStore() : null;
 
-					// Run dream with atomic staging
-					const result = await runDreamWithStaging(graphStore);
-
-					if (result.rolledBack) {
-						const nextStatus = buildDreamStatus();
-						const errorDetail = result.errorMessage ? `\nError: ${result.errorMessage}` : "";
-						return {
-							content: [
-								{
-									type: "text",
-									text: `Dream run failed and was rolled back. Check dream/tmp.failed-* for forensic data.${errorDetail}\n${formatDreamStatus(nextStatus)}`,
-								},
-							],
-							details: {
-								action,
-								rolledBack: true,
-								artifacts: result.artifacts,
-								errorMessage: result.errorMessage,
-								...nextStatus,
-							},
-						};
-					}
-
-					// Schedule search index update
-					await searchBackend.ensureReadyForUpdate();
-					searchBackend.scheduleUpdate();
-
+				if (result.rolledBack) {
 					const nextStatus = buildDreamStatus();
-					const artifactsChanged = result.artifacts.filter((a) => a.action !== "unchanged").length;
+					const errorDetail = result.errorMessage ? `\nError: ${result.errorMessage}` : "";
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Dream run complete. ${artifactsChanged} artifact(s) updated, graph ${result.graphUpdated ? "updated" : "unchanged"}.\n${formatDreamStatus(nextStatus)}`,
+								text: `Dream run failed and was rolled back. Check dream/tmp.failed-* for forensic data.${errorDetail}\n${formatDreamStatus(nextStatus)}`,
 							},
 						],
 						details: {
 							action,
-							...nextStatus,
-							qmdUpdateMode: searchBackend.getUpdateMode(),
+							rolledBack: true,
 							artifacts: result.artifacts,
-							graphUpdated: result.graphUpdated,
+							errorMessage: result.errorMessage,
+							...nextStatus,
 						},
 					};
-				} finally {
-					releaseDreamLock();
 				}
+
+				// Schedule search index update
+				await searchBackend.ensureReadyForUpdate();
+				searchBackend.scheduleUpdate();
+
+				const nextStatus = buildDreamStatus();
+				const artifactsChanged = result.artifacts.filter((a) => a.action !== "unchanged").length;
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Dream run complete. ${artifactsChanged} artifact(s) updated, graph ${result.graphUpdated ? "updated" : "unchanged"}.${result.errorMessage ? `\nWarning: ${result.errorMessage}` : ""}\n${formatDreamStatus(nextStatus)}`,
+						},
+					],
+					details: {
+						action,
+						...nextStatus,
+						qmdUpdateMode: searchBackend.getUpdateMode(),
+						artifacts: result.artifacts,
+						graphUpdated: result.graphUpdated,
+						warning: result.errorMessage,
+					},
+				};
 			}
 
 			if (action === "preview") {
