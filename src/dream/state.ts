@@ -354,7 +354,7 @@ export function buildDreamStatus(): DreamStatus {
 	const summaryMissing = !summaryContent.trim();
 	const state = readDreamState();
 	const lock = readDreamLock();
-	// Check if lock is stale (older than 30 minutes) - if so, treat as not locked
+	// Check if lock is stale (owner process dead) - if so, treat as not locked
 	const isLockStale = lock ? isStaleDreamLock(lock) : false;
 	const effectiveLock = lock && !isLockStale ? lock : null;
 
