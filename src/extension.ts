@@ -11,6 +11,8 @@ import {
 } from "./config/paths.js";
 import { buildMemoryBundle } from "./context/build-memory-bundle.js";
 import { buildGraphMemorySection, updateGraphFromCheckpoint } from "./graph/runtime.js";
+import { createSqliteGraphStore } from "./graph/sqlite-store.js";
+import type { GraphStore } from "./graph/store.js";
 import { parseScratchpad } from "./memory/scratchpad.js";
 import { qmdInstallInstructions } from "./qmd/messages.js";
 import { createQmdSearchBackend, type SearchBackend } from "./qmd/search-backend.js";
@@ -225,10 +227,28 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 		runtime.searchBackend.scheduleUpdate();
 	});
 
+	// Create lazy graph store provider for dream integration
+	const graphProvider = {
+		async getStore(): Promise<GraphStore | null> {
+			// Only supported in Node runtime (better-sqlite3 requires native bindings)
+			if (process.versions.bun) {
+				return null;
+			}
+			try {
+				const store = createSqliteGraphStore();
+				await store.open();
+				await store.migrate();
+				return store;
+			} catch {
+				return null;
+			}
+		},
+	};
+
 	pi.registerTool(createMemoryWriteTool(runtime.searchBackend));
 	pi.registerTool(createScratchpadTool(runtime.searchBackend));
 	pi.registerTool(createMemoryReadTool());
 	pi.registerTool(createMemorySearchTool(runtime.searchBackend));
 	pi.registerTool(createMemoryStatusTool(runtime.searchBackend));
-	pi.registerTool(createDreamTool(runtime.searchBackend));
+	pi.registerTool(createDreamTool(runtime.searchBackend, graphProvider));
 }

@@ -9,6 +9,7 @@ export {
 	getDreamDir,
 	getDreamLockFile,
 	getDreamStateFile,
+	getDreamTempDir,
 	getGraphDbFile,
 	getGraphDir,
 	getMemoryFile,
@@ -38,6 +39,33 @@ export {
 	yesterdayStr,
 } from "../config/paths.js";
 export { buildMemoryBundle, type MemoryBundle, type MemoryBundleOptions } from "../context/build-memory-bundle.js";
+export {
+	cleanupFailedTempDirs,
+	computeRetentionScore,
+	type DreamArtifactResult,
+	type DreamEngineResult,
+	getDreamTempStatus,
+	previewDreamStaging,
+	type RetentionScore,
+	runDreamWithStaging,
+	shouldArchive,
+} from "../dream/engine.js";
+export {
+	acquireDreamLock,
+	buildDreamPreviewArtifacts,
+	buildDreamStatus,
+	buildNextDreamState,
+	type DreamArtifactPreview,
+	type DreamLock,
+	type DreamState,
+	type DreamStatus,
+	formatDreamPreview,
+	formatDreamStatus,
+	readDreamLock,
+	readDreamState,
+	releaseDreamLock,
+	writeDreamState,
+} from "../dream/state.js";
 export { type DurablePromotionResult, promoteCheckpointMemories } from "../durable/promotion.js";
 export { type DurableRebuildResult, rebuildDurableMemorySummary } from "../durable/rebuild.js";
 export { type RecoverDerivedMemoryResult, recoverDerivedMemory } from "../durable/recover.js";
@@ -86,5 +114,5 @@ export {
 	formatExitSummaryEntry,
 	generateExitSummary,
 } from "../summarization/exit-summary.js";
-export { createDreamTool } from "../tools/dream.js";
+export { createDreamTool, type DreamAutoTriggerConfig } from "../tools/dream.js";
 export { createMemoryStatusTool } from "../tools/memory-status.js";

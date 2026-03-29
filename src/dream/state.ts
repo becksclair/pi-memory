@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import {
 	getDreamLockFile,
 	getDreamStateFile,
+	getDreamTempDir,
 	getMemorySummaryFile,
 	getSkillFile,
 	getSkillsDir,
@@ -35,6 +37,11 @@ export interface DreamStatus {
 	hoursSinceLastRun: number | null;
 	canRun: boolean;
 	gateReasons: string[];
+	tempDir: {
+		exists: boolean;
+		stagedFiles: string[];
+		failedDirs: string[];
+	};
 }
 
 export interface DreamArtifactPreview {
@@ -281,6 +288,25 @@ export function buildDreamStatus(): DreamStatus {
 	if (pendingItems < MIN_PENDING_ITEMS) {
 		gateReasons.push(`pending items ${pendingItems} < ${MIN_PENDING_ITEMS}`);
 	}
+
+	// Check temp directory status
+	const tempDir = getDreamTempDir();
+	let tempExists = false;
+	let stagedFiles: string[] = [];
+	let failedDirs: string[] = [];
+	try {
+		tempExists = fs.existsSync(tempDir);
+		if (tempExists) {
+			stagedFiles = fs.readdirSync(tempDir).filter((f) => f.endsWith(".md") || f.endsWith(".json"));
+		}
+		const dreamDir = path.dirname(tempDir);
+		if (fs.existsSync(dreamDir)) {
+			failedDirs = fs.readdirSync(dreamDir).filter((name) => name.startsWith("tmp.failed-"));
+		}
+	} catch {
+		// Best effort temp status
+	}
+
 	return {
 		lastRunAt,
 		topicCount: topicFiles.length,
@@ -293,11 +319,16 @@ export function buildDreamStatus(): DreamStatus {
 		hoursSinceLastRun,
 		canRun: gateReasons.length === 0,
 		gateReasons,
+		tempDir: {
+			exists: tempExists,
+			stagedFiles,
+			failedDirs,
+		},
 	};
 }
 
 export function formatDreamStatus(status: DreamStatus) {
-	return [
+	const lines = [
 		"Dream status",
 		`- Last run: ${status.lastRunAt ?? "never"}`,
 		`- Topics: ${status.topicCount}`,
@@ -308,7 +339,14 @@ export function formatDreamStatus(status: DreamStatus) {
 		`- Locked: ${status.locked ? `yes (${status.lockStartedAt})` : "no"}`,
 		`- Can run: ${status.canRun ? "yes" : "no"}`,
 		...(status.gateReasons.length > 0 ? ["- Gates:", ...status.gateReasons.map((reason) => `  - ${reason}`)] : []),
-	].join("\n");
+	];
+	if (status.tempDir.exists) {
+		lines.push(`- Staging: ${status.tempDir.stagedFiles.length} staged file(s)`);
+	}
+	if (status.tempDir.failedDirs.length > 0) {
+		lines.push(`- Failed runs: ${status.tempDir.failedDirs.length} temp dir(s) for inspection`);
+	}
+	return lines.join("\n");
 }
 
 export function formatDreamPreview(

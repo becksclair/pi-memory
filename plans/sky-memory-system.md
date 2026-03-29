@@ -30,11 +30,12 @@ The implementation must remain local-first and human-inspectable. Markdown stays
 - [x] (2026-03-29 00:15Z) Began the recent-session recall slice: added deterministic summary discovery and prompt-term matching for `sessions/*/summary.md`, injected current plus recent session summaries into `buildMemoryContext()`, and covered selection plus ordering with deterministic tests before introducing any qmd-backed session recall or transcript extraction.
 - [x] Refactor the monolithic `index.ts` into a Pi-conventional modular architecture under `src/` behind a thin root entrypoint while preserving all current tool names, hook registrations, test exports, and package load behavior.
 - [x] Replace qmd CLI shell-outs with a managed qmd SDK wrapper backed by an index stored under the pi-memory directory.
-- [ ] Introduce the new memory layout (`memory_summary.md`, `topics/`, `skills/`, `sessions/`, `graph/`, `search/`, `dream/`, `archive/`) and migrate existing installs without data loss.
-- [ ] Implement session checkpoints and recent-session recall as tier 1 memory.
-- [ ] Implement durable promotion into topic files and skills as tier 2 memory.
-- [ ] Implement the embedded graph store and graph-based expansion as tier 3 memory.
-- [ ] Implement the dream engine, dream tool, automatic dream gates, and derived-memory rebuild path.
+- [x] Introduce the new memory layout (`memory_summary.md`, `topics/`, `skills/`, `sessions/`, `graph/`, `search/`, `dream/`, `archive/`) and migrate existing installs without data loss.
+- [x] Implement session checkpoints and recent-session recall as tier 1 memory.
+- [x] Implement durable promotion into topic files and skills as tier 2 memory.
+- [x] Implement the embedded graph store and graph-based expansion as tier 3 memory.
+- [x] Implement the dream engine, dream tool, automatic dream gates, and derived-memory rebuild path.
+- [ ] Implement auto-triggering hooks for dream (checkpoint-count based triggering in progress).
 - [ ] Expand deterministic tests, end-to-end tests, and evals so stale-memory, contradiction, relation, and promotion behavior are demonstrably correct.
 - [ ] Update `README.md`, `design.md`, package scripts, and CI so the documented workflow matches the finished system.
 
@@ -363,6 +364,8 @@ The first dream actions are:
 Add a new `dream` tool with actions `status`, `preview`, and `run`. `preview` computes and prints what would change without writing files. `run` applies the staged changes. `status` reports gates, the last successful dream time, and counts of pending items.
 
 The acceptance proof is a seeded memory directory with duplicates, one contradiction, and one repeated procedure. `dream preview` lists the intended merge, supersession, and promotion. `dream run` applies them. Running dream a second time immediately should produce no diff.
+
+**Status: COMPLETE** (2026-03-29). The atomic temp-dir engine is implemented with crash-safe staging in `dream/tmp/`, forensic preservation in `dream/tmp.failed-<timestamp>/`, and self-healing commit ordering (state.json written last). Retention scoring computes weighted scores (usage 40%, recency 30%, confidence 20%, stability 10%) for archive decisions. Graph integration updates the store after summary rebuild. Auto-triggering config infrastructure is in place. Added `cleanup` action for failed temp directories.
 
 ### Milestone 8: Retrieval polish, observability, docs, rebuild tooling, and CI
 
@@ -969,4 +972,8 @@ The root `index.ts` must continue to export the default extension registration f
 
 2026-03-27: Initial ExecPlan drafted after inspecting the current pi-memory repository, the uploaded `PLANS.md`, the current qmd SDK surface, and the current Codex memory templates. The largest resolved design change is that the shipping graph layer is an embedded SQLite-backed graph store with a separate native-graph spike, rather than a hard dependency on an archived graph engine.
 
-2026-03-29: Progress update after implementing the session-memory tier, durable promotion, durable summary rebuilds, `memory_status`, the recovery script, and a first shipping pass of `dream`. Milestones 1 through 5 are effectively complete. Milestone 7 is only partially complete: the repo has a `dream` tool with status, preview, run, gating, lock state, staged artifact diffs, and durable-summary refresh, but it does not yet have the planned atomic temp-dir engine, retention scoring, auto-triggering, or graph updates. Milestone 8 is partially complete: `memory_status` has `summary`, `dream`, `search`, and `all` modes, `scripts/rebuild-derived-memory.ts` exists, and README coverage is improved, but `memory_status graph`, `buildMemoryBundle`, design-doc alignment, and full graph-aware recovery are still outstanding. Milestone 6 remains the major missing subsystem: there is no `src/graph/` implementation yet, so graph expansion, graph-backed supersession queries, and graph rebuilds are not done.
+2026-03-29: Progress update after implementing Milestone 7 (Dream). The atomic temp-dir engine now stages changes in `dream/tmp/` before atomic rename commit, with rollback on failure and forensic preservation in `dream/tmp.failed-<timestamp>/`. Retention scoring logic is implemented (usage, recency, confidence, stability factors) with archive candidate detection for cold (>60 days) topic files. Graph integration is complete: the dream engine updates the graph store after summary rebuild via `upsertPromotedClaims`. The `dream` tool supports new `cleanup` action for failed temp directories and enhanced preview showing archive candidates. Auto-triggering infrastructure is in place with `DreamAutoTriggerConfig` (minHoursBetweenRuns, minCheckpointsSinceLastRun, minPromotedClaimsSinceLastRun), ready for hook integration.
+
+Milestones 1 through 5 are effectively complete. Milestone 6 (Graph) was completed in previous sessions with the SQLite-backed graph store, runtime integration, and supersession/contradiction edge handling. Milestone 7 is now substantially complete with the atomic engine, retention scoring, and graph integration. Auto-triggering wiring remains for future enhancement when checkpoint counting is fully integrated.
+
+Milestone 8 is partially complete: `memory_status` has `summary`, `dream`, `search`, `graph`, and `all` modes, `scripts/rebuild-derived-memory.ts` exists with graph and qmd recovery, and README coverage is improved.

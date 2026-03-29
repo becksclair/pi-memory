@@ -143,6 +143,10 @@ export function getDreamLockFile() {
 	return path.join(getDreamDir(), "lock.json");
 }
 
+export function getDreamTempDir() {
+	return path.join(getDreamDir(), "tmp");
+}
+
 export function getArchiveDir() {
 	return state.archiveDir;
 }
