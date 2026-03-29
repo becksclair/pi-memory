@@ -59,12 +59,11 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 		const graphResult = await rebuildGraphFromMemoryRoot(getMemoryDir());
 		if (graphResult.rebuilt) {
 			console.log("[pi-memory] Graph rebuilt successfully from disk:", graphResult.dbPath);
+			// Only clear the dirty flag if graph was actually rebuilt
+			clearGraphDirtyFlag();
 		} else {
-			console.warn("[pi-memory] Graph rebuild skipped:", graphResult.reason);
+			console.warn("[pi-memory] Graph rebuild skipped, leaving dirty flag set:", graphResult.reason);
 		}
-
-		// Clear the graph dirty flag now that we've actually rebuilt
-		clearGraphDirtyFlag();
 
 		const searchAvailable = await searchBackend.ensureReadyForUpdate();
 		let searchUpdated = false;
@@ -81,7 +80,7 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 			searchAvailable,
 			searchUpdated,
 			qmdUpdateMode: searchBackend.getUpdateMode(),
-			graphDirtyCleared: true,
+			graphDirtyCleared: graphResult.rebuilt,
 			graphRebuilt: graphResult.rebuilt,
 		};
 	} finally {

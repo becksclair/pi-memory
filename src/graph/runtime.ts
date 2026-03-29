@@ -101,16 +101,29 @@ function formatGraphSection(expansion: GraphExpansion) {
 	return lines.join("\n").trim();
 }
 
-export async function updateGraphFromCheckpoint(result: WriteSessionCheckpointResult) {
+export async function updateGraphFromCheckpoint(
+	result: WriteSessionCheckpointResult,
+): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
+	// Skip graph update in unsupported runtimes (Bun) without treating as failure
+	if (!isGraphSupportedRuntime()) {
+		return { success: true, skipped: true };
+	}
 	const promotedPaths = [...result.promotion.promotedTopics, ...result.promotion.promotedSkills];
-	const updated = await withGraphStore(async (store) => {
-		await store.upsertCheckpoint(result.checkpoint);
-		if (promotedPaths.length > 0) {
-			await store.upsertPromotedClaims(promotedPaths);
+	try {
+		const updated = await withGraphStore(async (store) => {
+			await store.upsertCheckpoint(result.checkpoint);
+			if (promotedPaths.length > 0) {
+				await store.upsertPromotedClaims(promotedPaths);
+			}
+			return true;
+		});
+		if (updated === true) {
+			return { success: true };
 		}
-		return true;
-	});
-	return updated === true;
+		return { success: false, error: "graph store unavailable" };
+	} catch (err) {
+		return { success: false, error: err instanceof Error ? err.message : String(err) };
+	}
 }
 
 export async function buildGraphMemorySection(args: {

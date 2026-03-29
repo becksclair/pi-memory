@@ -130,8 +130,12 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			);
 			try {
 				const result = await recoverDerivedMemory(runtime.searchBackend);
-				if (result.graphDirtyCleared) {
+				if (result.graphRebuilt && result.graphDirtyCleared) {
 					console.log("[pi-memory] Graph recovery completed successfully.");
+				} else {
+					console.warn(
+						`[pi-memory] Graph recovery incomplete: rebuilt=${result.graphRebuilt}, dirtyCleared=${result.graphDirtyCleared}`,
+					);
 				}
 			} catch (err) {
 				console.error("[pi-memory] Graph recovery failed:", err instanceof Error ? err.message : String(err));
@@ -172,10 +176,10 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 						evidenceMarkdown: serializeSessionEvidence(branch),
 						...stats,
 					});
-					const graphUpdated = await updateGraphFromCheckpoint(checkpointResult);
-					if (!graphUpdated) {
-						console.warn("[pi-memory] Graph update failed for checkpoint, marking dirty");
-						setGraphDirtyFlag("checkpoint graph sync failed");
+					const graphResult = await updateGraphFromCheckpoint(checkpointResult);
+					if (!graphResult.success && !graphResult.skipped) {
+						console.warn("[pi-memory] Graph update failed for checkpoint, marking dirty:", graphResult.error);
+						setGraphDirtyFlag(graphResult.error ?? "checkpoint graph sync failed");
 					}
 					// Increment checkpoint counter for auto-trigger tracking
 					incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);
@@ -284,10 +288,10 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			evidenceMarkdown: serializeSessionEvidence(branch),
 			...stats,
 		});
-		const graphUpdated = await updateGraphFromCheckpoint(checkpointResult);
-		if (!graphUpdated) {
-			console.warn("[pi-memory] Graph update failed for checkpoint, marking dirty");
-			setGraphDirtyFlag("checkpoint graph sync failed");
+		const graphResult = await updateGraphFromCheckpoint(checkpointResult);
+		if (!graphResult.success && !graphResult.skipped) {
+			console.warn("[pi-memory] Graph update failed for checkpoint, marking dirty:", graphResult.error);
+			setGraphDirtyFlag(graphResult.error ?? "checkpoint graph sync failed");
 		}
 		// Increment checkpoint counter for auto-trigger tracking
 		incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);

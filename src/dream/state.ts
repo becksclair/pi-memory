@@ -325,14 +325,18 @@ export function buildDreamStatus(): DreamStatus {
 	const summaryMissing = !summaryContent.trim();
 	const state = readDreamState();
 	const lock = readDreamLock();
+	// Check if lock is stale (older than 30 minutes) - if so, treat as not locked
+	const isLockStale = lock ? isStaleDreamLock(lock) : false;
+	const effectiveLock = lock && !isLockStale ? lock : null;
+
 	const isNeverRun = state?.lastRunAt === "1970-01-01T00:00:00.000Z";
 	const lastRunAt = isNeverRun ? null : (state?.lastRunAt ?? null);
 	const hoursSinceLastRun = lastRunAt ? (Date.now() - new Date(lastRunAt).getTime()) / 3_600_000 : null;
 	const pendingItems =
 		supersededCount + (summaryMissing ? 1 : 0) + (!state && (topicFiles.length > 0 || skillFiles.length > 0) ? 1 : 0);
 	const gateReasons: string[] = [];
-	if (lock) {
-		gateReasons.push(`dream lock present since ${lock.startedAt}`);
+	if (effectiveLock) {
+		gateReasons.push(`dream lock present since ${effectiveLock.startedAt}`);
 	}
 	if (hoursSinceLastRun !== null && hoursSinceLastRun < MIN_DREAM_HOURS) {
 		gateReasons.push(`last dream ran ${hoursSinceLastRun.toFixed(1)}h ago (< ${MIN_DREAM_HOURS}h)`);

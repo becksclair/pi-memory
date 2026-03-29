@@ -53,7 +53,7 @@ describe("graph runtime integration", () => {
 		});
 
 		const updated = await updateGraphFromCheckpoint(checkpointResult);
-		assert.equal(updated, true);
+		assert.equal(updated.success, true);
 
 		const store = createSqliteGraphStore();
 		await store.open();
