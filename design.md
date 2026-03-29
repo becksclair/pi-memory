@@ -1,5 +1,11 @@
 # pi-memory: Designing Memory for Coding Agents
 
+## Status Note
+
+This document mostly describes the earlier selective-injection architecture and is no longer a complete description of the shipping system.
+
+As of 2026-03-29, the repo has additive three-tier storage scaffolding, session checkpoints and evidence, durable topic/skill promotion, `memory_status`, a recovery script, and a first shipping `dream` tool. The graph layer from the master plan is not implemented yet, and the final graph-aware retrieval bundle has not landed. Treat this document as background rationale plus historical context until it is rewritten after Milestone 6.
+
 ## The Problem
 
 Coding agents lose everything when the context window resets. A decision made in

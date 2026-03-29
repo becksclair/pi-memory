@@ -50,6 +50,8 @@ Without the SDK loading successfully, core tools (write/read/scratchpad) still w
 | `memory_read` | Read any memory file or list daily logs |
 | `scratchpad` | Add/done/undo/clear/list checklist items |
 | `memory_search` | Search across all memory files (requires qmd) |
+| `memory_status` | Inspect summary, dream, and search health; rebuild the summary |
+| `dream` | Preview or run lightweight durable-memory maintenance |
 
 ### memory_search modes
 
@@ -130,6 +132,16 @@ This ensures in-progress context survives compaction and is visible in the next 
 - **qmd embeddings**: Semantic/deep search needs vector embeddings. If you see “need embeddings” warnings, run `qmd embed` once and retry.
 - **Graceful degradation**: If the qmd SDK cannot load, core tools still work. `memory_search` returns setup guidance.
 
+### Manual recovery
+
+If the derived artifacts get out of sync, run:
+
+```bash
+npm run rebuild:derived
+```
+
+That rebuilds `memory_summary.md`, refreshes dream state, and runs an immediate local qmd index update when the SDK backend is available.
+
 ### Configuration
 
 | Variable | Values | Default | Description |
@@ -176,6 +188,9 @@ pi -p -e ./index.ts "remember: I prefer dark mode"
 
 # Verify memory was written
 cat ~/.pi/agent/memory/MEMORY.md
+
+# Rebuild derived artifacts after manual edits or weird state
+npm run rebuild:derived
 ```
 
 ## Publishing (maintainers)

@@ -23,6 +23,7 @@ import {
 	formatExitSummaryEntry,
 	formatPreviewBlock,
 	generateExitSummary,
+	getSessionCheckpointJsonFile,
 	nowTimestamp,
 	parseScratchpad,
 	qmdInstallInstructions,
@@ -1200,6 +1201,17 @@ describe("lifecycle hooks", () => {
 		await hooks.session_before_compact({}, ctx);
 		expect(ctx.ui.notify).not.toHaveBeenCalled();
 	});
+
+	test("session_before_compact still writes a checkpoint when there is no handoff text", async () => {
+		const ctx = createLifecycleCtx({
+			sessionId: "compact-session-1234",
+			branch: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } }],
+			hasUI: false,
+		}).ctx;
+		await hooks.session_before_compact({}, ctx);
+		expect(fs.existsSync(getSessionCheckpointJsonFile("compact-session-1234", 1))).toBe(true);
+		expect(readFileSafe(dailyPath(todayStr()))).toBeNull();
+	});
 });
 
 // ==========================================================================
@@ -1207,14 +1219,16 @@ describe("lifecycle hooks", () => {
 // ==========================================================================
 
 describe("extension registration", () => {
-	test("registers all 4 tools", () => {
+	test("registers all 6 tools", () => {
 		const mockPi = createMockPi();
 		registerExtension(mockPi.pi as any);
-		expect(Object.keys(mockPi.tools)).toHaveLength(4);
+		expect(Object.keys(mockPi.tools)).toHaveLength(6);
 		expect(mockPi.tools.memory_write).toBeDefined();
 		expect(mockPi.tools.memory_read).toBeDefined();
 		expect(mockPi.tools.scratchpad).toBeDefined();
 		expect(mockPi.tools.memory_search).toBeDefined();
+		expect(mockPi.tools.memory_status).toBeDefined();
+		expect(mockPi.tools.dream).toBeDefined();
 	});
 
 	test("registers all 4 lifecycle hooks", () => {
@@ -1229,7 +1243,7 @@ describe("extension registration", () => {
 	test("tools have labels and descriptions", () => {
 		const mockPi = createMockPi();
 		registerExtension(mockPi.pi as any);
-		for (const name of ["memory_write", "memory_read", "scratchpad", "memory_search"]) {
+		for (const name of ["memory_write", "memory_read", "scratchpad", "memory_search", "memory_status", "dream"]) {
 			expect(mockPi.tools[name].label).toBeTruthy();
 			expect(mockPi.tools[name].description).toBeTruthy();
 		}

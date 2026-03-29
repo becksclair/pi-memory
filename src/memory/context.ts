@@ -7,6 +7,12 @@ import {
 	todayStr,
 	yesterdayStr,
 } from "../config/paths.js";
+import { formatDurableMemoryHits, getRelevantDurableMemories } from "../durable/retrieval.js";
+import {
+	formatRecentSessionSummaries,
+	getCurrentSessionSummary,
+	getRecentSessionSummaries,
+} from "../session/recall.js";
 import {
 	buildPreview,
 	CONTEXT_DAILY_MAX_CHARS,
@@ -18,11 +24,13 @@ import {
 	CONTEXT_SCRATCHPAD_MAX_LINES,
 	CONTEXT_SEARCH_MAX_CHARS,
 	CONTEXT_SEARCH_MAX_LINES,
+	CONTEXT_SESSION_MAX_CHARS,
+	CONTEXT_SESSION_MAX_LINES,
 	formatContextSection,
 } from "../shared/preview.js";
 import { parseScratchpad, serializeScratchpad } from "./scratchpad.js";
 
-export function buildMemoryContext(searchResults?: string): string {
+export function buildMemoryContext(searchResults?: string, options?: { prompt?: string; sessionId?: string }): string {
 	ensureDirs();
 	const sections: string[] = [];
 
@@ -40,6 +48,46 @@ export function buildMemoryContext(searchResults?: string): string {
 			);
 			if (section) sections.push(section);
 		}
+	}
+
+	const currentSessionSummary = getCurrentSessionSummary(options?.sessionId);
+	if (currentSessionSummary?.summary.trim()) {
+		const section = formatContextSection(
+			`## Current session summary (${currentSessionSummary.sessionId.slice(0, 8)})`,
+			currentSessionSummary.summary,
+			"end",
+			CONTEXT_SESSION_MAX_LINES,
+			CONTEXT_SESSION_MAX_CHARS,
+		);
+		if (section) sections.push(section);
+	}
+
+	const durableMemories = getRelevantDurableMemories({ prompt: options?.prompt, limit: 4 });
+	if (durableMemories.length > 0) {
+		const section = formatContextSection(
+			"## Durable topics and skills",
+			formatDurableMemoryHits(durableMemories),
+			"start",
+			CONTEXT_LONG_TERM_MAX_LINES,
+			CONTEXT_LONG_TERM_MAX_CHARS,
+		);
+		if (section) sections.push(section);
+	}
+
+	const recentSessionSummaries = getRecentSessionSummaries({
+		prompt: options?.prompt,
+		excludeSessionId: options?.sessionId,
+		limit: 3,
+	});
+	if (recentSessionSummaries.length > 0) {
+		const section = formatContextSection(
+			"## Recent session summaries",
+			formatRecentSessionSummaries(recentSessionSummaries),
+			"end",
+			CONTEXT_SESSION_MAX_LINES,
+			CONTEXT_SESSION_MAX_CHARS,
+		);
+		if (section) sections.push(section);
 	}
 
 	const today = todayStr();

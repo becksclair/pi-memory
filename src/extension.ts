@@ -13,14 +13,18 @@ import { buildMemoryContext } from "./memory/context.js";
 import { parseScratchpad } from "./memory/scratchpad.js";
 import { qmdInstallInstructions } from "./qmd/messages.js";
 import { createQmdSearchBackend, type SearchBackend } from "./qmd/search-backend.js";
+import { countBranchMessages, ensureSessionScaffold, writeSessionCheckpoint } from "./session/checkpoint.js";
+import { serializeSessionEvidence } from "./session/extract.js";
 import {
 	buildExitSummaryFallback,
 	type ExitSummaryReason,
 	formatExitSummaryEntry,
 	generateExitSummary,
 } from "./summarization/exit-summary.js";
+import { createDreamTool } from "./tools/dream.js";
 import { createMemoryReadTool } from "./tools/memory-read.js";
 import { createMemorySearchTool } from "./tools/memory-search.js";
+import { createMemoryStatusTool } from "./tools/memory-status.js";
 import { createMemoryWriteTool } from "./tools/memory-write.js";
 import { createScratchpadTool } from "./tools/scratchpad.js";
 
@@ -47,6 +51,11 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 
 	pi.on("session_start", async (_event, ctx) => {
 		runtime.exitSummaryReason = null;
+		ensureDirs();
+		ensureSessionScaffold({
+			sessionId: ctx.sessionManager.getSessionId(),
+			startedAt: nowTimestamp(),
+		});
 		if (runtime.terminalInputUnsubscribe) {
 			runtime.terminalInputUnsubscribe();
 			runtime.terminalInputUnsubscribe = null;
@@ -95,6 +104,17 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 					const existing = readFileSafe(filePath) ?? "";
 					const separator = existing.trim() ? "\n\n" : "";
 					fs.writeFileSync(filePath, existing + separator + entry, "utf-8");
+					const branch = typeof ctx.sessionManager.getBranch === "function" ? ctx.sessionManager.getBranch() : [];
+					const stats = countBranchMessages(branch);
+					writeSessionCheckpoint({
+						sessionId: ctx.sessionManager.getSessionId(),
+						trigger: "session_shutdown",
+						timestamp: ts,
+						summaryMarkdown: summary,
+						summarySource: result.summary ? "existing-exit-summary" : "fallback",
+						evidenceMarkdown: serializeSessionEvidence(branch),
+						...stats,
+					});
 					await runtime.searchBackend.ensureReadyForUpdate();
 					await runtime.searchBackend.runUpdateNow();
 				}
@@ -112,10 +132,19 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 		return { action: "continue" };
 	});
 
-	pi.on("before_agent_start", async (event, _ctx) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		const skipSearch = process.env.PI_MEMORY_NO_SEARCH === "1";
 		const searchResults = skipSearch ? "" : await runtime.searchBackend.searchRelevantMemories(event.prompt ?? "");
-		const memoryContext = buildMemoryContext(searchResults);
+		let memoryContext = "";
+		try {
+			memoryContext = buildMemoryContext(searchResults, {
+				prompt: event.prompt ?? "",
+				sessionId: ctx.sessionManager?.getSessionId?.(),
+			});
+		} catch (err) {
+			console.debug("pi-memory: buildMemoryContext failed", err instanceof Error ? err.message : String(err));
+			return;
+		}
 		if (!memoryContext) return;
 
 		const memoryInstructions = [
@@ -138,7 +167,8 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 
 	pi.on("session_before_compact", async (_event, ctx) => {
 		ensureDirs();
-		const sid = shortSessionId(ctx.sessionManager.getSessionId());
+		const sessionId = ctx.sessionManager.getSessionId();
+		const sid = shortSessionId(sessionId);
 		const ts = nowTimestamp();
 		const parts: string[] = [];
 
@@ -160,13 +190,25 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			parts.push(`**Recent daily log context:**\n${tail}`);
 		}
 
-		if (parts.length === 0) return;
-
-		const handoff = [`<!-- HANDOFF ${ts} [${sid}] -->`, "## Session Handoff", ...parts].join("\n");
-		const filePath = dailyPath(todayStr());
-		const existing = readFileSafe(filePath) ?? "";
-		const separator = existing.trim() ? "\n\n" : "";
-		fs.writeFileSync(filePath, existing + separator + handoff, "utf-8");
+		let handoff = "";
+		if (parts.length > 0) {
+			handoff = [`<!-- HANDOFF ${ts} [${sid}] -->`, "## Session Handoff", ...parts].join("\n");
+			const filePath = dailyPath(todayStr());
+			const existing = readFileSafe(filePath) ?? "";
+			const separator = existing.trim() ? "\n\n" : "";
+			fs.writeFileSync(filePath, existing + separator + handoff, "utf-8");
+		}
+		const branch = typeof ctx.sessionManager.getBranch === "function" ? ctx.sessionManager.getBranch() : [];
+		const stats = countBranchMessages(branch);
+		writeSessionCheckpoint({
+			sessionId,
+			trigger: "session_before_compact",
+			timestamp: ts,
+			summaryMarkdown: handoff || "## Session Handoff\n\nNo additional handoff context captured.",
+			summarySource: "stub",
+			evidenceMarkdown: serializeSessionEvidence(branch),
+			...stats,
+		});
 		await runtime.searchBackend.ensureReadyForUpdate();
 		runtime.searchBackend.scheduleUpdate();
 	});
@@ -175,4 +217,6 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 	pi.registerTool(createScratchpadTool(runtime.searchBackend));
 	pi.registerTool(createMemoryReadTool());
 	pi.registerTool(createMemorySearchTool(runtime.searchBackend));
+	pi.registerTool(createMemoryStatusTool(runtime.searchBackend));
+	pi.registerTool(createDreamTool(runtime.searchBackend));
 }

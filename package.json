@@ -46,6 +46,7 @@
 		"postinstall": "node scripts/postinstall.cjs",
 		"build": "tsc -p tsconfig.json --noEmit",
 		"lint": "biome check .",
+		"rebuild:derived": "npx tsx scripts/rebuild-derived-memory.ts",
 		"test": "bun test test/unit test/unit.test.ts && bun test/unit.ts",
 		"test:unit": "bun test test/unit test/unit.test.ts && bun test/unit.ts",
 		"test:e2e": "npx tsx test/e2e.ts",
