@@ -11,7 +11,12 @@ import {
 } from "./config/paths.js";
 import { buildMemoryBundle } from "./context/build-memory-bundle.js";
 import { runDreamWithStaging } from "./dream/engine.js";
-import { checkAutoDreamTrigger, incrementCheckpointCounter, readGraphDirtyFlag } from "./dream/state.js";
+import {
+	checkAutoDreamTrigger,
+	incrementCheckpointCounter,
+	readGraphDirtyFlag,
+	setGraphDirtyFlag,
+} from "./dream/state.js";
 import { recoverDerivedMemory } from "./durable/recover.js";
 import { buildGraphMemorySection, updateGraphFromCheckpoint } from "./graph/runtime.js";
 import { createSqliteGraphStore } from "./graph/sqlite-store.js";
@@ -167,7 +172,11 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 						evidenceMarkdown: serializeSessionEvidence(branch),
 						...stats,
 					});
-					await updateGraphFromCheckpoint(checkpointResult);
+					const graphUpdated = await updateGraphFromCheckpoint(checkpointResult);
+					if (!graphUpdated) {
+						console.warn("[pi-memory] Graph update failed for checkpoint, marking dirty");
+						setGraphDirtyFlag("checkpoint graph sync failed");
+					}
 					// Increment checkpoint counter for auto-trigger tracking
 					incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);
 					// Check auto-trigger conditions and run dream if thresholds met
@@ -275,7 +284,11 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			evidenceMarkdown: serializeSessionEvidence(branch),
 			...stats,
 		});
-		await updateGraphFromCheckpoint(checkpointResult);
+		const graphUpdated = await updateGraphFromCheckpoint(checkpointResult);
+		if (!graphUpdated) {
+			console.warn("[pi-memory] Graph update failed for checkpoint, marking dirty");
+			setGraphDirtyFlag("checkpoint graph sync failed");
+		}
 		// Increment checkpoint counter for auto-trigger tracking
 		incrementCheckpointCounter(checkpointResult.promotion.promotedCount ?? 0);
 		// Check auto-trigger conditions and run dream if thresholds met

@@ -1,4 +1,4 @@
-import { ensureDirs, readFileSafe } from "../config/paths.js";
+import { ensureDirs, getMemoryDir, readFileSafe } from "../config/paths.js";
 import {
 	acquireDreamLock,
 	clearGraphDirtyFlag,
@@ -6,6 +6,7 @@ import {
 	releaseDreamLock,
 	writeDreamState,
 } from "../dream/state.js";
+import { rebuildGraphFromMemoryRoot } from "../graph/runtime.js";
 import type { SearchBackend } from "../qmd/search-backend.js";
 import { rebuildDurableMemorySummary } from "./rebuild.js";
 
@@ -18,6 +19,7 @@ export interface RecoverDerivedMemoryResult {
 	searchUpdated: boolean;
 	qmdUpdateMode: SearchBackend["getUpdateMode"] extends () => infer T ? T : string;
 	graphDirtyCleared: boolean;
+	graphRebuilt: boolean;
 }
 
 export async function recoverDerivedMemory(searchBackend: SearchBackend): Promise<RecoverDerivedMemoryResult> {
@@ -53,7 +55,15 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 			promotedClaimsSinceLastRun: existingState?.promotedClaimsSinceLastRun ?? 0,
 		});
 
-		// Clear the graph dirty flag since we just rebuilt everything from disk
+		// Actually rebuild the SQLite graph from disk - don't just clear the flag
+		const graphResult = await rebuildGraphFromMemoryRoot(getMemoryDir());
+		if (graphResult.rebuilt) {
+			console.log("[pi-memory] Graph rebuilt successfully from disk:", graphResult.dbPath);
+		} else {
+			console.warn("[pi-memory] Graph rebuild skipped:", graphResult.reason);
+		}
+
+		// Clear the graph dirty flag now that we've actually rebuilt
 		clearGraphDirtyFlag();
 
 		const searchAvailable = await searchBackend.ensureReadyForUpdate();
@@ -72,6 +82,7 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 			searchUpdated,
 			qmdUpdateMode: searchBackend.getUpdateMode(),
 			graphDirtyCleared: true,
+			graphRebuilt: graphResult.rebuilt,
 		};
 	} finally {
 		releaseDreamLock();
