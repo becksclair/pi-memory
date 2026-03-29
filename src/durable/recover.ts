@@ -1,8 +1,10 @@
 import { ensureDirs, getMemoryDir, readFileSafe } from "../config/paths.js";
 import {
+	acquireCounterLock,
 	acquireDreamLock,
 	clearGraphDirtyFlag,
 	readDreamState,
+	releaseCounterLock,
 	releaseDreamLock,
 	writeDreamState,
 } from "../dream/state.js";
@@ -44,16 +46,45 @@ export async function recoverDerivedMemory(searchBackend: SearchBackend): Promis
 		const summaryContent = readFileSafe(rebuild.summaryPath) ?? "";
 
 		// Preserve existing checkpoint counters during recovery - don't zero them
-		// This maintains the activity tracking for auto-trigger logic
-		const existingState = readDreamState();
-		writeDreamState({
-			lastRunAt: new Date().toISOString(),
-			topicCount: rebuild.topicCount,
-			skillCount: rebuild.skillCount,
-			summarySize: summaryContent.length,
-			checkpointsSinceLastRun: existingState?.checkpointsSinceLastRun ?? 0,
-			promotedClaimsSinceLastRun: existingState?.promotedClaimsSinceLastRun ?? 0,
-		});
+		// Acquire counter lock to prevent race with concurrent checkpoint increments
+		let counterLockAcquired = false;
+		for (let i = 0; i < 50; i++) {
+			counterLockAcquired = acquireCounterLock();
+			if (counterLockAcquired) break;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+
+		let preservedCheckpoints = 0;
+		let preservedPromotedClaims = 0;
+		if (counterLockAcquired) {
+			try {
+				const existingState = readDreamState();
+				preservedCheckpoints = existingState?.checkpointsSinceLastRun ?? 0;
+				preservedPromotedClaims = existingState?.promotedClaimsSinceLastRun ?? 0;
+				writeDreamState({
+					lastRunAt: new Date().toISOString(),
+					topicCount: rebuild.topicCount,
+					skillCount: rebuild.skillCount,
+					summarySize: summaryContent.length,
+					checkpointsSinceLastRun: preservedCheckpoints,
+					promotedClaimsSinceLastRun: preservedPromotedClaims,
+				});
+			} finally {
+				releaseCounterLock();
+			}
+		} else {
+			// Could not acquire counter lock - proceed without preserving counters
+			// This is a best-effort fallback; counters may be lost
+			console.warn("[pi-memory] Could not acquire counter lock during recovery, counters may be lost");
+			writeDreamState({
+				lastRunAt: new Date().toISOString(),
+				topicCount: rebuild.topicCount,
+				skillCount: rebuild.skillCount,
+				summarySize: summaryContent.length,
+				checkpointsSinceLastRun: 0,
+				promotedClaimsSinceLastRun: 0,
+			});
+		}
 
 		// Actually rebuild the SQLite graph from disk - don't just clear the flag
 		const graphResult = await rebuildGraphFromMemoryRoot(getMemoryDir());
