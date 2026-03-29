@@ -490,6 +490,27 @@ export class SqliteGraphStore implements GraphStore {
 		]);
 	}
 
+	async pruneStalePromotedClaims(existingPaths: string[]): Promise<number> {
+		const db = this.requireDb();
+		const existingSet = new Set(existingPaths);
+
+		// Find all promoted claim source paths in the graph
+		const promotedRows = db
+			.prepare("SELECT DISTINCT source_path AS sourcePath FROM claims WHERE source_checkpoint IS NULL")
+			.all() as Array<{ sourcePath: string }>;
+
+		let prunedCount = 0;
+		for (const { sourcePath } of promotedRows) {
+			// If this source path is a topic/skill file that no longer exists, delete it
+			if (!existingSet.has(sourcePath) && (sourcePath.includes("/topics/") || sourcePath.includes("/skills/"))) {
+				this.deleteSourceRecords(sourcePath, null);
+				prunedCount++;
+			}
+		}
+
+		return prunedCount;
+	}
+
 	private requireDb() {
 		if (!this.db) {
 			throw new Error("Graph store is not open.");

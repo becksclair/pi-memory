@@ -112,17 +112,8 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 			});
 		}
 
-		const available = await runtime.searchBackend.isAvailable();
-		if (!available) {
-			if (ctx.hasUI) {
-				ctx.ui.notify(qmdInstallInstructions(), "info");
-			}
-			return;
-		}
-
-		await runtime.searchBackend.setup();
-
-		// Check if graph is marked dirty and attempt recovery
+		// Check if graph is marked dirty and attempt recovery (do this before qmd setup)
+		// Graph recovery is independent of search backend availability
 		const graphDirty = readGraphDirtyFlag();
 		if (graphDirty.dirty) {
 			console.warn(
@@ -141,6 +132,16 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 				console.error("[pi-memory] Graph recovery failed:", err instanceof Error ? err.message : String(err));
 			}
 		}
+
+		const available = await runtime.searchBackend.isAvailable();
+		if (!available) {
+			if (ctx.hasUI) {
+				ctx.ui.notify(qmdInstallInstructions(), "info");
+			}
+			return;
+		}
+
+		await runtime.searchBackend.setup();
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {

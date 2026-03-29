@@ -36,4 +36,6 @@ export interface GraphStore {
 	markClaimsUsed(claimIds: string[], usedAt: string): Promise<void>;
 	stats(): Promise<GraphStats>;
 	rebuildFromFiles(memoryRoot: string): Promise<void>;
+	/** Remove graph records for promoted claims whose source files no longer exist */
+	pruneStalePromotedClaims(existingPaths: string[]): Promise<number>;
 }

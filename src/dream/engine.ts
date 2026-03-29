@@ -318,6 +318,12 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 					await graphStore.upsertPromotedClaims([...topicFiles, ...skillFiles]);
 					graphUpdated = true;
 				}
+				// Prune stale promoted claims for files that no longer exist
+				const allExistingPaths = [...topicFiles, ...skillFiles];
+				const prunedCount = await graphStore.pruneStalePromotedClaims(allExistingPaths);
+				if (prunedCount > 0) {
+					console.log(`[pi-memory] Pruned ${prunedCount} stale promoted claim(s) from graph`);
+				}
 				// Graph sync succeeded - clear any previously set dirty flag
 				clearGraphDirtyFlag();
 			} catch (err) {
