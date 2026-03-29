@@ -7,9 +7,11 @@ import {
 	acquireCounterLock,
 	acquireDreamLock,
 	buildNextDreamState,
+	clearGraphDirtyFlag,
 	readDreamState,
 	releaseCounterLock,
 	releaseDreamLock,
+	setGraphDirtyFlag,
 } from "./state.js";
 
 export interface DreamEngineResult {
@@ -316,12 +318,15 @@ export async function runDreamWithStaging(graphStore: GraphStore | null): Promis
 					await graphStore.upsertPromotedClaims([...topicFiles, ...skillFiles]);
 					graphUpdated = true;
 				}
+				// Graph sync succeeded - clear any previously set dirty flag
+				clearGraphDirtyFlag();
 			} catch (err) {
-				// Graph sync failed after file commit - mark for later rebuild
+				// Graph sync failed after file commit - persist dirty flag for later recovery
 				graphSyncError = err instanceof Error ? err.message : String(err);
 				graphUpdated = false;
+				setGraphDirtyFlag(graphSyncError);
 				// Don't throw - files are the source of truth and are already committed
-				// Graph can be rebuilt later from disk state
+				// Graph will be rebuilt on next startup or recovery if dirty flag is set
 			}
 		}
 

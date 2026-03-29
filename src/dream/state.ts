@@ -127,6 +127,31 @@ export function writeDreamState(state: DreamState) {
 	fs.writeFileSync(getDreamStateFile(), `${JSON.stringify(state, null, 2)}\n`, "utf-8");
 }
 
+const GRAPH_DIRTY_FILE = "graph.dirty";
+
+export function readGraphDirtyFlag(): { dirty: boolean; since: string | null; error: string | null } {
+	try {
+		const content = fs.readFileSync(path.join(getDreamDir(), GRAPH_DIRTY_FILE), "utf-8");
+		const parsed = JSON.parse(content) as { since: string; error: string };
+		return { dirty: true, since: parsed.since ?? null, error: parsed.error ?? null };
+	} catch {
+		return { dirty: false, since: null, error: null };
+	}
+}
+
+export function setGraphDirtyFlag(error: string): void {
+	const flag = { since: new Date().toISOString(), error };
+	fs.writeFileSync(path.join(getDreamDir(), GRAPH_DIRTY_FILE), `${JSON.stringify(flag, null, 2)}\n`, "utf-8");
+}
+
+export function clearGraphDirtyFlag(): void {
+	try {
+		fs.unlinkSync(path.join(getDreamDir(), GRAPH_DIRTY_FILE));
+	} catch {
+		// Best effort - may not exist
+	}
+}
+
 export function readDreamLock(): DreamLock | null {
 	try {
 		return JSON.parse(fs.readFileSync(getDreamLockFile(), "utf-8")) as DreamLock;

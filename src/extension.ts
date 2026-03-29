@@ -11,7 +11,8 @@ import {
 } from "./config/paths.js";
 import { buildMemoryBundle } from "./context/build-memory-bundle.js";
 import { runDreamWithStaging } from "./dream/engine.js";
-import { checkAutoDreamTrigger, incrementCheckpointCounter } from "./dream/state.js";
+import { checkAutoDreamTrigger, incrementCheckpointCounter, readGraphDirtyFlag } from "./dream/state.js";
+import { recoverDerivedMemory } from "./durable/recover.js";
 import { buildGraphMemorySection, updateGraphFromCheckpoint } from "./graph/runtime.js";
 import { createSqliteGraphStore } from "./graph/sqlite-store.js";
 import type { GraphStore } from "./graph/store.js";
@@ -115,6 +116,22 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 		}
 
 		await runtime.searchBackend.setup();
+
+		// Check if graph is marked dirty and attempt recovery
+		const graphDirty = readGraphDirtyFlag();
+		if (graphDirty.dirty) {
+			console.warn(
+				`[pi-memory] Graph marked dirty since ${graphDirty.since}, error: ${graphDirty.error}. Attempting recovery...`,
+			);
+			try {
+				const result = await recoverDerivedMemory(runtime.searchBackend);
+				if (result.graphDirtyCleared) {
+					console.log("[pi-memory] Graph recovery completed successfully.");
+				}
+			} catch (err) {
+				console.error("[pi-memory] Graph recovery failed:", err instanceof Error ? err.message : String(err));
+			}
+		}
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -279,7 +296,12 @@ export default function registerExtension(pi: ExtensionAPI, options?: RegisterEx
 				await store.open();
 				await store.migrate();
 				return store;
-			} catch {
+			} catch (err) {
+				// Log graph initialization failures for visibility
+				console.warn(
+					"[pi-memory] Graph store initialization failed:",
+					err instanceof Error ? err.message : String(err),
+				);
 				return null;
 			}
 		},
